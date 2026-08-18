@@ -13,7 +13,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useStore } from '@/lib/store'
-import { genMetrics, fmtNum } from '@/lib/metrics'
+import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, AUTH_LABELS } from '@/components/badges'
 import type { ApiItem } from '@/types'
 
@@ -114,7 +114,7 @@ export default function ApiList() {
               </TableRow>
             )}
             {filtered.map((a) => {
-              const today = genMetrics(a.id, a.baseCalls, 1)[0]
+              const todayCalls = a.todayCalls ?? 0
               return (
                 <TableRow key={a.id} className="cursor-pointer" onClick={() => navigate(`/apis/${a.id}`)}>
                   <TableCell><MethodBadge method={a.method} /></TableCell>
@@ -127,7 +127,7 @@ export default function ApiList() {
                   <TableCell><StatusBadge status={a.status} /></TableCell>
                   <TableCell><HealthDot health={a.health} /></TableCell>
                   <TableCell className="text-sm text-slate-600">{AUTH_LABELS[a.auth]}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">{a.status === 'published' ? fmtNum(today?.calls ?? 0) : '—'}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{a.status === 'published' ? fmtNum(todayCalls) : '—'}</TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>

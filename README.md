@@ -1,6 +1,6 @@
 # WebAPI 管理平台
 
-对标市面主流 API 管理平台（如 Apifox / YApi / Konga）的 API 网关管理控制台，覆盖 API 从注册、发布、监控到废弃的完整生命周期。
+对标市面主流 API 管理平台（如 Apifox / YApi / Konga）的全栈 API 网关管理控制台：**真实网关转发 + 管理控制台**，覆盖 API 从注册、发布、监控到废弃的完整生命周期。
 
 ## 功能总览
 
@@ -9,31 +9,44 @@
 | **平台概览** | API 总数、今日调用量、成功率、告警统计；30 天调用趋势、状态分布饼图、Top 5 调用量排行、健康度一览 |
 | **API 注册** | 分段式表单：基本信息（路径 + 方法全局唯一性校验）、后端服务地址、超时 / 失败重试 / QPS 限流 / **熔断保护**等稳定性配置、鉴权方式（无鉴权 / API Key / OAuth2 / JWT）、Query / Header / Body 参数文档、响应示例（JSON 合法性校验） |
 | **API 管理** | 关键词搜索 + 状态 / 方法 / 分组多维筛选；草稿 → 已发布 → 已下线 → 已废弃 完整生命周期流转；删除二次确认并联动清理应用授权 |
-| **API 详情** | 运行监控图表（调用量 / 错误数 / 延迟趋势）、接口文档（含一键复制 cURL）、**在线调试**（模拟请求，返回状态码与延迟）、版本历史时间线（修改版本号自动追加记录） |
+| **API 详情** | 运行监控图表（调用量 / 错误数 / 延迟趋势，来自网关真实流量）、接口文档（含一键复制 cURL）、**在线调试**（通过网关发起真实请求，计入指标）、版本历史时间线 |
 | **分组管理** | 分组 CRUD，非空分组禁止删除（保护性约束） |
-| **应用与密钥** | 调用方应用管理；AccessKey / SecretKey 自动生成、脱敏显示、一键重置；按 API 粒度勾选授权；应用启停控制 |
-| **监控告警** | 全局错误率 / 延迟趋势图；告警规则 CRUD（错误率 / 延迟 / QPS 阈值，严重 / 警告 / 提醒三级）；告警记录标记处理 |
+| **应用与密钥** | 调用方应用管理；AccessKey / SecretKey 自动生成、脱敏显示、一键重置；按 API 粒度勾选授权；应用启停控制（停用后网关立即拒绝调用） |
+| **监控告警** | 全局错误率 / 延迟趋势图；告警规则 CRUD（错误率 / 延迟 / QPS 阈值，严重 / 警告 / 提醒三级）；**超阈值自动生成告警记录**，支持标记处理 |
 
 ## 技术栈
 
-- **框架**:React 19 + TypeScript + Vite
-- **UI**:Tailwind CSS + shadcn/ui（40+ 组件）
-- **图表**:Recharts
-- **路由**:React Router 7
-- **状态管理**:React Context + useReducer，数据持久化至 `localStorage`（刷新不丢失，内置示例数据，侧栏可一键重置）
+**前端**：React 19 + TypeScript + Vite · Tailwind CSS + shadcn/ui · Recharts · React Router 7
+
+**后端**：Node.js 原生 `node:http` + `node:sqlite`（零第三方依赖，Node 20.17+ / 22.5+ 需 flag，推荐 Node 24），SQLite 文件持久化（`server/data.db`）
+
+- 管理 API（`/admin/*`）：API / 分组 / 应用 / 告警规则的增删改查、状态流转、指标聚合查询
+- 真实网关（`/gw/*`）：注册路径（含 `{param}` 占位符）匹配转发、API Key 鉴权与应用授权校验、QPS 限流、超时 / 失败重试、**熔断保护**（窗口内错误率超阈值自动开启）、调用指标落库、超阈值自动生成告警
+- 内置 mock 上游（`/upstream/*`）：echo 服务，支持 `?__fail=500` 与 `?__delay=ms` 故障注入，便于验证告警与熔断链路
 
 ## 本地启动
 
 ```bash
 npm install
-npm run dev        # 默认 http://localhost:3000，可用 -- --port <N> 指定端口
+
+# 终端 1：后端（管理 API + 网关 + SQLite，端口 3100）
+npm run server
+
+# 终端 2：前端（默认 http://localhost:3000，Vite 已配置 /admin 与 /gw 代理）
+npm run dev
+```
+
+打开前端后，在「应用与密钥」复制任一启用中应用的 AccessKey，即可通过网关真实调用：
+
+```bash
+curl -H "X-Access-Key: <AccessKey>" http://localhost:3100/gw/api/v1/users/123
 ```
 
 ## 构建
 
 ```bash
-npm run build      # 产物输出到 dist/，为纯静态站点，可部署到任意静态托管
-npm run preview    # 本地预览生产构建
+npm run build      # 前端产物输出到 dist/
+npm run preview    # 本地预览生产构建（后端需另行运行）
 ```
 
 ## 目录结构
@@ -42,20 +55,20 @@ npm run preview    # 本地预览生产构建
 src/
 ├── components/        # Layout 布局、通用徽标组件、shadcn/ui 组件库
 ├── lib/
-│   ├── store.tsx      # 全局状态（Context + Reducer + localStorage 持久化）
-│   ├── seed.ts        # 内置示例数据（11 个 API / 4 分组 / 3 应用 / 告警规则）
-│   └── metrics.ts     # 确定性模拟指标生成（调用量 / 错误数 / 延迟）
-├── pages/
-│   ├── Dashboard.tsx  # 平台概览
-│   ├── ApiList.tsx    # API 列表管理
-│   ├── ApiForm.tsx    # API 注册 / 编辑
-│   ├── ApiDetail.tsx  # API 详情（监控 / 文档 / 调试 / 版本）
-│   ├── Groups.tsx     # 分组管理
-│   ├── Apps.tsx       # 应用与密钥
-│   └── Monitor.tsx    # 监控告警
+│   ├── store.tsx      # 全局状态：动作先同步后端，成功后更新本地
+│   ├── api.ts         # 后端 API 客户端 + useMetrics 指标 Hook
+│   └── metrics.ts     # 格式化工具
+├── pages/             # Dashboard / ApiList / ApiForm / ApiDetail / Groups / Apps / Monitor
 └── types/             # TypeScript 类型定义
+
+server/
+├── index.js           # HTTP 服务：管理 API + 网关转发 + mock 上游
+├── db.js              # SQLite 表结构、读写、指标聚合
+└── seed.js            # 内置示例数据（11 个 API / 4 分组 / 3 应用 / 告警规则 / 30 天历史指标）
 ```
 
 ## 说明
 
-当前为纯前端实现，调用量、错误率、延迟等指标由基于 API ID 的确定性伪随机算法生成，用于演示完整的产品形态；接入真实网关时替换 `src/lib/metrics.ts` 与 `src/lib/store.tsx` 的数据源即可，页面层无需改动。
+- 首次启动后端时自动灌入示例数据（含 30 天历史指标）；侧栏「重置演示数据」可随时恢复出厂状态
+- 示例 API 的后端地址指向内置 mock 上游，开箱即可真实调通；注册自己的 API 时把后端地址改成任意可访问的 http(s) 地址即可
+- 健康度基于最近 5 分钟真实调用的错误率计算；限流与熔断为内存态，重启后端后清零

@@ -7,7 +7,8 @@ import {
 import { Globe, Zap, CheckCircle2, BellRing, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useStore } from '@/lib/store'
-import { genMetrics, mergeMetrics, fmtNum } from '@/lib/metrics'
+import { useMetrics } from '@/lib/api'
+import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, STATUS_META } from '@/components/badges'
 
 const PIE_COLORS: Record<string, string> = {
@@ -18,10 +19,7 @@ export default function Dashboard() {
   const { state } = useStore()
   const { apis, groups, alertRecords } = state
 
-  const allMetrics = useMemo(() => {
-    const published = apis.filter((a) => a.status === 'published')
-    return mergeMetrics(published.map((a) => genMetrics(a.id, a.baseCalls, 30)))
-  }, [apis])
+  const allMetrics = useMetrics(undefined, 30)
 
   const today = allMetrics[allMetrics.length - 1]
   const totalCalls = allMetrics.reduce((s, m) => s + m.calls, 0)
@@ -38,10 +36,7 @@ export default function Dashboard() {
   const topApis = useMemo(() => {
     return [...apis]
       .filter((a) => a.status === 'published')
-      .map((a) => {
-        const m = genMetrics(a.id, a.baseCalls, 30)
-        return { name: a.name, calls: m.reduce((s, p) => s + p.calls, 0), id: a.id }
-      })
+      .map((a) => ({ name: a.name, calls: a.calls30d ?? 0, id: a.id }))
       .sort((a, b) => b.calls - a.calls)
       .slice(0, 5)
   }, [apis])

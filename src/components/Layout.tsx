@@ -19,8 +19,32 @@ const NAV = [
 ]
 
 export default function Layout() {
-  const { state, dispatch } = useStore()
+  const { state, dispatch, ready, loadError, reload } = useStore()
   const unacked = state.alertRecords.filter((r) => !r.acked).length
+
+  if (!ready) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-100 text-sm text-slate-500">
+        正在连接后端服务…
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-slate-100">
+        <p className="text-lg font-semibold text-slate-700">无法连接后端服务</p>
+        <p className="max-w-md text-center text-sm text-slate-500">
+          请先在项目根目录启动后端：<code className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-xs">npm run server</code>
+          <br />
+          <span className="text-xs text-slate-400">错误详情：{loadError}</span>
+        </p>
+        <button onClick={reload} className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600">
+          重新连接
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-screen bg-slate-100 text-slate-900">

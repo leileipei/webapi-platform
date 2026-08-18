@@ -9,6 +9,10 @@ export default defineConfig({
   plugins: [inspectAttr(), react()],
   server: {
     port: 3000,
+    proxy: {
+      '/admin': 'http://localhost:3100',
+      '/gw': 'http://localhost:3100',
+    },
   },
   resolve: {
     alias: {

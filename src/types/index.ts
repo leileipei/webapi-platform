@@ -46,8 +46,12 @@ export interface ApiItem {
   createdAt: string
   updatedAt: string
   health: HealthStatus
-  baseCalls: number // 用于生成模拟指标的基准日调用量
+  baseCalls: number
   versions: VersionRecord[]
+  /** 后端注入：今日调用量 */
+  todayCalls?: number
+  /** 后端注入：近 30 天调用量 */
+  calls30d?: number
 }
 
 export interface ApiGroup {
@@ -90,7 +94,7 @@ export interface AlertRecord {
   level: AlertLevel
   message: string
   time: string
-  acked: boolean
+  acked: number
 }
 
 export interface MetricPoint {

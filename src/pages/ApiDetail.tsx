@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import {
   ArrowLeft, Pencil, ArrowUpCircle, ArrowDownCircle, Ban, Trash2, Play, Loader2, Copy, Check,
@@ -17,7 +17,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { useStore } from '@/lib/store'
-import { genMetrics, fmtNum } from '@/lib/metrics'
+import { useMetrics } from '@/lib/api'
+import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, AUTH_LABELS } from '@/components/badges'
 import type { ApiItem } from '@/types'
 
@@ -58,13 +59,14 @@ export default function ApiDetail() {
   const navigate = useNavigate()
   const { state, dispatch } = useStore()
   const api = state.apis.find((a) => a.id === id)
-  const metrics = useMemo(() => (api ? genMetrics(api.id, api.baseCalls, 30) : []), [api])
 
   // debug console state
   const [debugParams, setDebugParams] = useState<Record<string, string>>({})
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<{ status: number; latency: number; body: string } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [metricsVersion, setMetricsVersion] = useState(0)
+  const metrics = useMetrics(api?.id, 30, metricsVersion)
 
   if (!api) {
     return (
@@ -77,30 +79,57 @@ export default function ApiDetail() {
 
   const group = state.groups.find((g) => g.id === api.groupId)
   const boundApps = state.apps.filter((app) => app.apiIds.includes(api.id))
+  const pathParams = [...api.path.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
   const totalCalls = metrics.reduce((s, m) => s + m.calls, 0)
   const totalErrors = metrics.reduce((s, m) => s + m.errors, 0)
   const successRate = totalCalls > 0 ? ((1 - totalErrors / totalCalls) * 100).toFixed(2) : '100.00'
   const avgLatency = metrics.length ? Math.round(metrics.reduce((s, m) => s + m.avgLatency, 0) / metrics.length) : 0
 
-  const runDebug = () => {
+  const runDebug = async () => {
     setRunning(true)
     setResult(null)
-    const latency = Math.round(30 + Math.random() * (api.health === 'degraded' ? 400 : 120))
-    setTimeout(() => {
-      const fail = api.health === 'down' || Math.random() < 0.03
-      let body: string
-      try {
-        body = JSON.stringify(JSON.parse(api.responseExample), null, 2)
-      } catch {
-        body = api.responseExample
+    // 路径参数替换
+    let path = api.path
+    for (const [k, v] of Object.entries(debugParams)) {
+      path = path.replace(`{${k}}`, encodeURIComponent(v || k))
+    }
+    // Query 参数拼接
+    const qs = new URLSearchParams()
+    for (const p of api.queryParams) {
+      const v = debugParams[p.name]
+      if (v) qs.set(p.name, v)
+    }
+    // 请求体
+    let body: string | undefined
+    if (api.method !== 'GET' && api.bodyParams.length > 0) {
+      const obj: Record<string, string> = {}
+      for (const p of api.bodyParams) {
+        if (debugParams[p.name]) obj[p.name] = debugParams[p.name]
       }
-      setResult({
-        status: fail ? 502 : 200,
-        latency,
-        body: fail ? '{\n  "code": 50200,\n  "message": "Bad Gateway: 后端服务无响应"\n}' : body,
-      })
-      setRunning(false)
-    }, latency + 200)
+      body = JSON.stringify(obj)
+    }
+    // 自动携带首个已授权应用的 AccessKey
+    const app = boundApps.find((a) => a.status === 'active')
+    const headers: Record<string, string> = {}
+    if (api.auth === 'apikey' && app) headers['X-Access-Key'] = app.accessKey
+    if (body) headers['Content-Type'] = 'application/json'
+
+    const start = performance.now()
+    try {
+      const res = await fetch(`/gw${path}${qs.size ? '?' + qs.toString() : ''}`, { method: api.method, headers, body })
+      const text = await res.text()
+      let pretty = text
+      try {
+        pretty = JSON.stringify(JSON.parse(text), null, 2)
+      } catch {
+        // 非 JSON 原样展示
+      }
+      setResult({ status: res.status, latency: Math.round(performance.now() - start), body: pretty })
+    } catch (err) {
+      setResult({ status: 0, latency: Math.round(performance.now() - start), body: `请求失败：${err instanceof Error ? err.message : '网络错误'}\n请确认后端服务已启动（npm run server）` })
+    }
+    setRunning(false)
+    setMetricsVersion((v) => v + 1) // 调试流量已计入指标，刷新图表
   }
 
   const changeStatus = (s: ApiItem['status']) => {
@@ -290,9 +319,23 @@ export default function ApiDetail() {
             <Card>
               <CardHeader><CardTitle className="text-base">请求参数</CardTitle></CardHeader>
               <CardContent className="space-y-3">
-                {api.queryParams.length === 0 && api.bodyParams.length === 0 && (
+                {pathParams.length === 0 && api.queryParams.length === 0 && api.bodyParams.length === 0 && (
                   <p className="text-sm text-slate-500">该接口没有可填参数，直接发送即可。</p>
                 )}
+                {pathParams.map((name) => (
+                  <div key={name} className="space-y-1">
+                    <label className="text-xs font-medium text-slate-600">
+                      {name} <span className="text-red-500">*</span>
+                      <span className="ml-1 font-normal text-slate-400">(路径参数)</span>
+                    </label>
+                    <Input
+                      value={debugParams[name] ?? ''}
+                      onChange={(e) => setDebugParams((d) => ({ ...d, [name]: e.target.value }))}
+                      placeholder={`{${name}}`}
+                      className="h-9 font-mono text-xs"
+                    />
+                  </div>
+                ))}
                 {api.queryParams.map((p) => (
                   <div key={p.name} className="space-y-1">
                     <label className="text-xs font-medium text-slate-600">
@@ -322,7 +365,12 @@ export default function ApiDetail() {
                   </div>
                 ))}
                 {api.status !== 'published' && (
-                  <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-700">该 API 当前未发布，调试请求将发送至沙箱环境（模拟数据）。</p>
+                  <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-700">该 API 当前未发布，网关将拒绝请求（403）。发布后才可真实调用。</p>
+                )}
+                {api.auth === 'apikey' && (
+                  <p className="rounded-lg bg-blue-50 p-3 text-xs text-blue-700">
+                    将自动携带应用「{boundApps.find((a) => a.status === 'active')?.name ?? '无可用授权应用'}」的 AccessKey 发起真实网关请求，调用会计入监控指标。
+                  </p>
                 )}
                 <Button onClick={runDebug} disabled={running} className="w-full">
                   {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
@@ -342,8 +390,8 @@ export default function ApiDetail() {
                 {result && !running && (
                   <div className="space-y-3">
                     <div className="flex items-center gap-4 text-sm">
-                      <span className={`rounded px-2 py-0.5 font-mono text-xs font-semibold ${result.status === 200 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                        {result.status}
+                      <span className={`rounded px-2 py-0.5 font-mono text-xs font-semibold ${result.status >= 200 && result.status < 300 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                        {result.status === 0 ? 'ERR' : result.status}
                       </span>
                       <span className="text-slate-500">{result.latency} ms</span>
                     </div>

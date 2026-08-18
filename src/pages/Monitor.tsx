@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { Plus, Pencil, Trash2, CheckCheck, BellRing } from 'lucide-react'
 import { toast } from 'sonner'
@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useStore, newId } from '@/lib/store'
-import { genMetrics, mergeMetrics } from '@/lib/metrics'
+import { useMetrics } from '@/lib/api'
 import type { AlertRule, AlertMetric, AlertLevel } from '@/types'
 
 const METRIC_LABELS: Record<AlertMetric, { label: string; unit: string }> = {
@@ -34,10 +34,7 @@ export default function Monitor() {
   const [editing, setEditing] = useState<AlertRule | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
 
-  const merged = useMemo(() => {
-    const published = state.apis.filter((a) => a.status === 'published')
-    return mergeMetrics(published.map((a) => genMetrics(a.id, a.baseCalls, 30)))
-  }, [state.apis])
+  const merged = useMetrics(undefined, 30)
 
   const trend = merged.map((m) => ({
     ...m,
