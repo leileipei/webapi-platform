@@ -122,6 +122,40 @@ export function queryLogs({ apiId, statusClass, appName, keyword, page = 1, page
   return { total, page, pageSize, items }
 }
 
+/** 近 N 分钟分钟级流量聚合（基于日志表，含被拒绝请求；返回 UTC 分钟串，前端转本地时区） */
+export function queryMinuteMetrics(minutes = 60, apiId) {
+  const since = new Date(Date.now() - minutes * 60000).toISOString().replace('T', ' ').slice(0, 16)
+  const whereApi = apiId ? 'AND api_id = ?' : ''
+  const args = apiId ? [since, apiId] : [since]
+  const rows = db.prepare(`
+    SELECT substr(ts, 1, 16) m,
+           COUNT(*) calls,
+           SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) errors,
+           SUM(CASE WHEN status >= 400 AND status < 500 THEN 1 ELSE 0 END) rejected,
+           ROUND(AVG(latency)) lat
+    FROM logs WHERE ts >= ? ${whereApi}
+    GROUP BY m ORDER BY m
+  `).all(...args)
+  const byMinute = new Map(rows.map((r) => [r.m, r]))
+
+  // 补齐无流量的分钟，保证曲线连续
+  const out = []
+  const now = Date.now()
+  for (let i = minutes - 1; i >= 0; i--) {
+    const d = new Date(now - i * 60000)
+    const key = d.toISOString().replace('T', ' ').slice(0, 16)
+    const r = byMinute.get(key)
+    out.push({
+      minute: key,
+      calls: r ? Number(r.calls) : 0,
+      errors: r ? Number(r.errors) : 0,
+      rejected: r ? Number(r.rejected) : 0,
+      avgLatency: r ? Number(r.lat) : 0,
+    })
+  }
+  return out
+}
+
 /** 查询指标：apiId 为空时汇总所有已发布 API */
 export function queryMetrics(apiId, days = 30) {
   const since = new Date()

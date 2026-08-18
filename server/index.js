@@ -1,7 +1,7 @@
 // WebAPI 管理平台后端：管理 API + 真实网关转发 + 内置 mock 上游
 // 零第三方依赖：node:http + node:sqlite
 import http from 'node:http'
-import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs } from './db.js'
+import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics } from './db.js'
 import { ensureAdmin, login, verify, logout, changePassword } from './auth.js'
 
 ensureAdmin()
@@ -384,6 +384,12 @@ async function handleAdmin(req, res, url) {
       const apiId = url.searchParams.get('apiId')
       const days = Math.min(Number(url.searchParams.get('days') ?? 30), 90)
       return json(res, 200, queryMetrics(apiId || null, days))
+    }
+
+    if (resource === 'logs' && id === 'minutes' && req.method === 'GET') {
+      const minutes = Math.min(360, Math.max(5, Number(url.searchParams.get('minutes') ?? 60)))
+      const apiId = url.searchParams.get('apiId') || undefined
+      return json(res, 200, queryMinuteMetrics(minutes, apiId))
     }
 
     if (resource === 'logs' && req.method === 'GET') {

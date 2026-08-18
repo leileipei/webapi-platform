@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useStore } from '@/lib/store'
-import { authStorage } from '@/lib/api'
+import { authStorage, toLocal } from '@/lib/api'
 import { MethodBadge } from '@/components/badges'
 import type { ApiLog, LogPage, HttpMethod } from '@/types'
 
@@ -153,7 +153,7 @@ export default function Logs() {
             )}
             {data.items.map((log: ApiLog) => (
               <TableRow key={log.id}>
-                <TableCell className="font-mono text-xs text-slate-500">{log.ts.slice(5)}</TableCell>
+                <TableCell className="font-mono text-xs text-slate-500">{toLocal(log.ts)}</TableCell>
                 <TableCell className="text-sm">
                   {log.api_id ? (
                     <Link to={`/apis/${log.api_id}`} className="text-blue-600 hover:underline">{log.api_name}</Link>

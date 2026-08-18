@@ -68,3 +68,41 @@ export function useMetrics(apiId?: string, days = 30, refreshKey: unknown = 0) {
   }, [apiId, days, refreshKey])
   return data
 }
+
+export interface MinutePoint {
+  minute: string // UTC 'YYYY-MM-DD HH:MM'
+  calls: number
+  errors: number
+  rejected: number
+  avgLatency: number
+}
+
+/** 近 N 分钟分钟级流量（实时，基于调用日志） */
+export function useMinuteMetrics(minutes = 60, apiId?: string, refreshKey: unknown = 0) {
+  const [data, setData] = useState<MinutePoint[]>([])
+  useEffect(() => {
+    let cancelled = false
+    const params = new URLSearchParams({ minutes: String(minutes) })
+    if (apiId) params.set('apiId', apiId)
+    const token = authStorage.getToken()
+    fetch(`/admin/logs/minutes?${params}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => {
+        if (!cancelled && Array.isArray(d)) setData(d)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [minutes, apiId, refreshKey])
+  return data
+}
+
+/** 后端时间串为 UTC（'YYYY-MM-DD HH:MM[:SS]'），转本地显示 */
+export function toLocal(ts: string, withSeconds = true): string {
+  const d = new Date(ts.replace(' ', 'T') + 'Z')
+  if (Number.isNaN(d.getTime())) return ts
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const base = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return withSeconds ? `${base}:${pad(d.getSeconds())}` : base
+}

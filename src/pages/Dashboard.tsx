@@ -7,7 +7,7 @@ import {
 import { Globe, Zap, CheckCircle2, BellRing, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useStore } from '@/lib/store'
-import { useMetrics } from '@/lib/api'
+import { useMetrics, toLocal } from '@/lib/api'
 import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, STATUS_META } from '@/components/badges'
 
@@ -159,7 +159,7 @@ export default function Dashboard() {
                   {!r.acked && <span className="rounded bg-red-50 px-1.5 text-[11px] text-red-600">未处理</span>}
                 </div>
                 <p className="mt-1 line-clamp-2 text-xs text-slate-500">{r.message}</p>
-                <div className="mt-1 text-[11px] text-slate-400">{r.time}</div>
+                <div className="mt-1 text-[11px] text-slate-400">{toLocal(r.time)}</div>
               </div>
             ))}
           </CardContent>

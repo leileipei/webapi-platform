@@ -181,18 +181,19 @@ export function seedRules() {
 }
 
 export function seedAlerts() {
+  const tsDaysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().replace('T', ' ').slice(0, 19)
   return [
     {
       id: 'alert-1', ruleId: 'rule-1', ruleName: '错误率过高', apiId: 'api-order-create', apiName: '创建订单',
       level: 'critical',
       message: '「创建订单」历史错误率曾达 7.2%，超过阈值 5%（示例数据）',
-      time: daysAgo(6) + ' 14:23:07', acked: 0,
+      time: tsDaysAgo(6), acked: 0,
     },
     {
       id: 'alert-2', ruleId: 'rule-2', ruleName: '平均延迟超阈值', apiId: 'api-order-create', apiName: '创建订单',
       level: 'warning',
       message: '「创建订单」平均延迟 386ms，接近阈值 500ms（示例数据）',
-      time: daysAgo(2) + ' 09:41:52', acked: 1,
+      time: tsDaysAgo(2), acked: 1,
     },
   ]
 }

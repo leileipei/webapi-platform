@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { Plus, Pencil, Trash2, CheckCheck, BellRing } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, LineChart, Line,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, LineChart, Line, Legend,
 } from 'recharts'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useStore, newId } from '@/lib/store'
-import { useMetrics } from '@/lib/api'
+import { useMetrics, useMinuteMetrics, toLocal } from '@/lib/api'
 import type { AlertRule, AlertMetric, AlertLevel } from '@/types'
 
 const METRIC_LABELS: Record<AlertMetric, { label: string; unit: string }> = {
@@ -33,8 +33,21 @@ export default function Monitor() {
   const { state, dispatch } = useStore()
   const [editing, setEditing] = useState<AlertRule | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [realtimeKey, setRealtimeKey] = useState(0)
 
   const merged = useMetrics(undefined, 30)
+  const minuteData = useMinuteMetrics(60, undefined, realtimeKey)
+
+  // 实时流量图每 10 秒刷新
+  useEffect(() => {
+    const timer = setInterval(() => setRealtimeKey((k) => k + 1), 10000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const realtime = minuteData.map((m) => ({ ...m, label: toLocal(m.minute, false) }))
+  const lastMinute = realtime[realtime.length - 1]
+  const hourTotal = minuteData.reduce((s, m) => s + m.calls, 0)
+  const hourErrors = minuteData.reduce((s, m) => s + m.errors, 0)
 
   const trend = merged.map((m) => ({
     ...m,
@@ -79,6 +92,50 @@ export default function Monitor() {
           </Button>
         )}
       </div>
+
+      {/* Realtime minute-level traffic */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-base">
+            实时流量（近 1 小时 · 分钟级）
+            <span className="flex items-center gap-1.5 text-xs font-normal text-emerald-600">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" /> 每 10s 自动刷新
+            </span>
+          </CardTitle>
+          <div className="flex gap-4 text-xs text-slate-500">
+            <span>近 1 小时调用 <b className="text-slate-800">{hourTotal}</b></span>
+            <span>5xx <b className={hourErrors > 0 ? 'text-red-600' : 'text-slate-800'}>{hourErrors}</b></span>
+            <span>当前分钟延迟 <b className="text-slate-800">{lastMinute?.avgLatency ?? 0} ms</b></span>
+          </div>
+        </CardHeader>
+        <CardContent className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={realtime} margin={{ left: 8, right: 8 }}>
+              <defs>
+                <linearGradient id="rtCalls" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" interval={9} />
+              <YAxis yAxisId="left" tick={{ fontSize: 11 }} stroke="#94a3b8" width={44} allowDecimals={false} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} stroke="#94a3b8" width={48} unit="ms" />
+              <RTooltip
+                formatter={(v: number, name: string) => {
+                  const labels: Record<string, string> = { calls: '调用量', errors: '5xx 错误', rejected: '被拒绝(4xx)', avgLatency: '平均延迟' }
+                  return [name === 'avgLatency' ? `${v} ms` : v, labels[name] ?? name]
+                }}
+              />
+              <Legend formatter={(v: string) => ({ calls: '调用量', errors: '5xx 错误', rejected: '被拒绝(4xx)', avgLatency: '平均延迟' }[v] ?? v)} />
+              <Area yAxisId="left" type="monotone" dataKey="calls" stroke="#3b82f6" strokeWidth={2} fill="url(#rtCalls)" name="calls" />
+              <Area yAxisId="left" type="monotone" dataKey="rejected" stroke="#f59e0b" strokeWidth={1.5} fill="none" name="rejected" />
+              <Area yAxisId="left" type="monotone" dataKey="errors" stroke="#ef4444" strokeWidth={1.5} fill="none" name="errors" />
+              <Line yAxisId="right" type="monotone" dataKey="avgLatency" stroke="#8b5cf6" strokeWidth={1.5} dot={false} name="avgLatency" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
       {/* Charts */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -196,7 +253,7 @@ export default function Monitor() {
                   <span className="text-sm">{r.message}</span>
                   <Link to={`/apis/${r.apiId}`} className="ml-2 text-xs text-blue-600 hover:underline">查看 API</Link>
                 </TableCell>
-                <TableCell className="font-mono text-xs text-slate-500">{r.time}</TableCell>
+                <TableCell className="font-mono text-xs text-slate-500">{toLocal(r.time)}</TableCell>
                 <TableCell>
                   {r.acked ? <span className="text-xs text-slate-400">已处理</span> : <span className="text-xs font-medium text-red-600">未处理</span>}
                 </TableCell>
