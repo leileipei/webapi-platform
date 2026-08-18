@@ -28,13 +28,10 @@
 
 ```bash
 npm install
-
-# 终端 1：后端（管理 API + 网关 + SQLite，端口 3100）
-npm run server
-
-# 终端 2：前端（默认 http://localhost:3000，Vite 已配置 /admin 与 /gw 代理）
-npm run dev
+npm run dev        # 一键同时启动后端(3100)与前端(3000)，支持 -- --port <N> 透传给 Vite
 ```
+
+也可分开启动：`npm run server`（仅后端）、`npm run dev:web`（仅前端）。
 
 打开前端后，在「应用与密钥」复制任一启用中应用的 AccessKey，即可通过网关真实调用：
 
