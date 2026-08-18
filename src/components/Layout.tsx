@@ -1,7 +1,7 @@
 import { NavLink, Navigate, Outlet, useNavigate } from 'react-router'
 import { useState } from 'react'
 import {
-  LayoutDashboard, Globe, FolderTree, KeyRound, Activity, Plus, RefreshCw, ShieldCheck,
+  LayoutDashboard, Globe, FolderTree, KeyRound, Activity, Plus, ShieldCheck,
   CircleUserRound, LogOut, LockKeyhole, ScrollText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -12,10 +12,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 
 const NAV = [
   { to: '/', label: '概览', icon: LayoutDashboard, end: true },
@@ -80,7 +76,7 @@ function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 }
 
 export default function Layout() {
-  const { state, dispatch, ready, loadError, reload } = useStore()
+  const { state, ready, loadError, reload } = useStore()
   const navigate = useNavigate()
   const [pwdOpen, setPwdOpen] = useState(false)
   const unacked = state.alertRecords.filter((r) => !r.acked).length
@@ -164,30 +160,6 @@ export default function Layout() {
           >
             <Plus className="h-4 w-4" /> 注册新 API
           </NavLink>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <button className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-400 hover:bg-white/5 hover:text-white">
-                <RefreshCw className="h-3.5 w-3.5" /> 重置演示数据
-              </button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>重置演示数据？</AlertDialogTitle>
-                <AlertDialogDescription>将清除你在本地做的全部修改，恢复为内置示例数据。此操作不可撤销。</AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => {
-                    dispatch({ type: 'reset' })
-                    toast.success('已恢复内置示例数据')
-                  }}
-                >
-                  确认重置
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
 
           {/* 当前用户 */}
           <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2">
