@@ -26,6 +26,21 @@ CREATE TABLE IF NOT EXISTS metrics (
   latency_sum INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (api_id, date)
 );
+CREATE TABLE IF NOT EXISTS logs (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts       TEXT NOT NULL,
+  api_id   TEXT,
+  api_name TEXT,
+  app_name TEXT,
+  method   TEXT NOT NULL,
+  path     TEXT NOT NULL,
+  status   INTEGER NOT NULL,
+  latency  INTEGER NOT NULL DEFAULT 0,
+  ip       TEXT,
+  message  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs (ts);
+CREATE INDEX IF NOT EXISTS idx_logs_api ON logs (api_id);
 `)
 
 const upsertStmt = {
@@ -70,6 +85,41 @@ export function recordMetric(apiId, ok, latencyMs) {
       errors = errors + excluded.errors,
       latency_sum = latency_sum + excluded.latency_sum
   `).run(apiId, date, ok ? 0 : 1, Math.round(latencyMs))
+}
+
+const MAX_LOGS = 20000
+
+/** 记录一条调用日志（含被网关拒绝的请求），超容量时修剪最旧记录 */
+export function addLog(entry) {
+  db.prepare(
+    'INSERT INTO logs (ts, api_id, api_name, app_name, method, path, status, latency, ip, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    new Date().toISOString().replace('T', ' ').slice(0, 19),
+    entry.apiId ?? null, entry.apiName ?? null, entry.appName ?? null,
+    entry.method, entry.path, entry.status, Math.round(entry.latency ?? 0), entry.ip ?? null, entry.message ?? null,
+  )
+  const count = db.prepare('SELECT COUNT(*) c FROM logs').get().c
+  if (count > MAX_LOGS) {
+    db.prepare('DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id ASC LIMIT ?)').run(count - MAX_LOGS)
+  }
+}
+
+/** 分页查询调用日志 */
+export function queryLogs({ apiId, statusClass, appName, keyword, page = 1, pageSize = 20 }) {
+  const where = []
+  const args = []
+  if (apiId) { where.push('api_id = ?'); args.push(apiId) }
+  if (statusClass === '2xx') where.push('status >= 200 AND status < 300')
+  if (statusClass === '4xx') where.push('status >= 400 AND status < 500')
+  if (statusClass === '5xx') where.push('status >= 500')
+  if (appName) { where.push('app_name = ?'); args.push(appName) }
+  if (keyword) { where.push('(path LIKE ? OR message LIKE ? OR api_name LIKE ?)'); args.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`) }
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
+  const total = db.prepare(`SELECT COUNT(*) c FROM logs ${whereSql}`).get(...args).c
+  const items = db.prepare(
+    `SELECT * FROM logs ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
+  ).all(...args, pageSize, (page - 1) * pageSize)
+  return { total, page, pageSize, items }
 }
 
 /** 查询指标：apiId 为空时汇总所有已发布 API */
@@ -125,7 +175,7 @@ export function apiCallStats() {
 }
 
 function clearAll() {
-  db.exec('DELETE FROM apis; DELETE FROM groups_; DELETE FROM apps; DELETE FROM rules; DELETE FROM alerts; DELETE FROM metrics;')
+  db.exec('DELETE FROM apis; DELETE FROM groups_; DELETE FROM apps; DELETE FROM rules; DELETE FROM alerts; DELETE FROM metrics; DELETE FROM logs;')
 }
 
 export function seedAll() {

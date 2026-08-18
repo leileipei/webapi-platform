@@ -103,3 +103,24 @@ export interface MetricPoint {
   errors: number
   avgLatency: number
 }
+
+export interface ApiLog {
+  id: number
+  ts: string
+  api_id: string | null
+  api_name: string | null
+  app_name: string | null
+  method: string
+  path: string
+  status: number
+  latency: number
+  ip: string | null
+  message: string | null
+}
+
+export interface LogPage {
+  total: number
+  page: number
+  pageSize: number
+  items: ApiLog[]
+}

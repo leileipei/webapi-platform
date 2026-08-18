@@ -10,6 +10,7 @@ import ApiDetail from '@/pages/ApiDetail'
 import Groups from '@/pages/Groups'
 import Apps from '@/pages/Apps'
 import Monitor from '@/pages/Monitor'
+import Logs from '@/pages/Logs'
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/groups" element={<Groups />} />
           <Route path="/apps" element={<Apps />} />
           <Route path="/monitor" element={<Monitor />} />
+          <Route path="/logs" element={<Logs />} />
         </Route>
       </Routes>
       <Toaster richColors position="top-right" />

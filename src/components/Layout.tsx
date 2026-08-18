@@ -2,7 +2,7 @@ import { NavLink, Navigate, Outlet, useNavigate } from 'react-router'
 import { useState } from 'react'
 import {
   LayoutDashboard, Globe, FolderTree, KeyRound, Activity, Plus, RefreshCw, ShieldCheck,
-  CircleUserRound, LogOut, LockKeyhole,
+  CircleUserRound, LogOut, LockKeyhole, ScrollText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/lib/store'
@@ -23,6 +23,7 @@ const NAV = [
   { to: '/groups', label: '分组管理', icon: FolderTree },
   { to: '/apps', label: '应用与密钥', icon: KeyRound },
   { to: '/monitor', label: '监控告警', icon: Activity },
+  { to: '/logs', label: '调用日志', icon: ScrollText },
 ]
 
 function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {

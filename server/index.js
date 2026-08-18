@@ -1,7 +1,7 @@
 // WebAPI 管理平台后端：管理 API + 真实网关转发 + 内置 mock 上游
 // 零第三方依赖：node:http + node:sqlite
 import http from 'node:http'
-import { store, recordMetric, queryMetrics, apiCallStats, seedAll } from './db.js'
+import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs } from './db.js'
 import { ensureAdmin, login, verify, logout, changePassword } from './auth.js'
 
 ensureAdmin()
@@ -213,13 +213,27 @@ async function handleGateway(req, res, url) {
   const apis = store.list('apis')
   const matched = matchApi(apis, req.method, reqPath)
 
-  if (!matched) return json(res, 404, { code: 40404, message: `网关未找到路由: ${req.method} ${reqPath}` })
-  if (matched.methodMismatch) return json(res, 405, { code: 40500, message: '请求方法不允许' })
+  // 审计日志：网关所有出入请求（含被拒绝的）都落库
+  const log = { method: req.method, path: reqPath + (url.search || ''), ip: req.socket.remoteAddress }
+  const writeLog = (status, extra = {}) =>
+    addLog({ ...log, status, latency: performance.now() - start, ...extra })
+
+  if (!matched) {
+    writeLog(404, { message: '路由不存在' })
+    return json(res, 404, { code: 40404, message: `网关未找到路由: ${req.method} ${reqPath}` })
+  }
+  if (matched.methodMismatch) {
+    writeLog(405, { message: '请求方法不允许' })
+    return json(res, 405, { code: 40500, message: '请求方法不允许' })
+  }
 
   const { api, params } = matched
+  log.apiId = api.id
+  log.apiName = api.name
 
   // 生命周期检查
   if (api.status !== 'published') {
+    writeLog(403, { message: `API 状态为 ${api.status}` })
     return json(res, 403, { code: 40301, message: `API「${api.name}」当前状态为 ${api.status}，不可调用` })
   }
 
@@ -227,16 +241,30 @@ async function handleGateway(req, res, url) {
   if (api.auth === 'apikey') {
     const ak = req.headers['x-access-key']
     const app = ak ? store.list('apps').find((a) => a.accessKey === ak) : null
-    if (!app) return json(res, 401, { code: 40100, message: '缺少或无效的 X-Access-Key' })
-    if (app.status !== 'active') return json(res, 401, { code: 40101, message: `应用「${app.name}」已被停用` })
-    if (!app.apiIds.includes(api.id)) return json(res, 403, { code: 40302, message: `应用「${app.name}」未被授权调用该 API` })
+    if (app) log.appName = app.name
+    if (!app) {
+      writeLog(401, { message: '缺少或无效的 AccessKey' })
+      return json(res, 401, { code: 40100, message: '缺少或无效的 X-Access-Key' })
+    }
+    if (app.status !== 'active') {
+      writeLog(401, { message: `应用「${app.name}」已停用` })
+      return json(res, 401, { code: 40101, message: `应用「${app.name}」已被停用` })
+    }
+    if (!app.apiIds.includes(api.id)) {
+      writeLog(403, { message: `应用「${app.name}」未授权` })
+      return json(res, 403, { code: 40302, message: `应用「${app.name}」未被授权调用该 API` })
+    }
   }
 
   // 限流
-  if (!checkRateLimit(api)) return json(res, 429, { code: 42900, message: `触发限流：QPS 上限 ${api.qps}` })
+  if (!checkRateLimit(api)) {
+    writeLog(429, { message: `QPS 超上限 ${api.qps}` })
+    return json(res, 429, { code: 42900, message: `触发限流：QPS 上限 ${api.qps}` })
+  }
 
   // 熔断
   if (!checkCircuitBreaker(api)) {
+    writeLog(503, { message: '熔断开启' })
     return json(res, 503, { code: 50301, message: '熔断开启：后端错误率过高，请稍后重试' })
   }
 
@@ -250,6 +278,7 @@ async function handleGateway(req, res, url) {
     recordMetric(api.id, ok, latency)
     evaluateAlerts(api.id)
     updateCircuitBreaker(api)
+    writeLog(result.status, ok ? {} : { message: `上游返回 ${result.status}` })
     res.writeHead(result.status, {
       'Content-Type': result.contentType,
       'Access-Control-Allow-Origin': '*',
@@ -264,6 +293,7 @@ async function handleGateway(req, res, url) {
     evaluateAlerts(api.id)
     updateCircuitBreaker(api)
     const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+    writeLog(isTimeout ? 504 : 502, { message: isTimeout ? '后端超时' : `后端不可达 ${err?.cause?.code ?? ''}` })
     json(res, isTimeout ? 504 : 502, {
       code: isTimeout ? 50400 : 50200,
       message: isTimeout ? `后端超时（>${api.timeout}ms）` : `后端不可达：${err?.cause?.code ?? err?.message ?? 'unknown'}`,
@@ -354,6 +384,17 @@ async function handleAdmin(req, res, url) {
       const apiId = url.searchParams.get('apiId')
       const days = Math.min(Number(url.searchParams.get('days') ?? 30), 90)
       return json(res, 200, queryMetrics(apiId || null, days))
+    }
+
+    if (resource === 'logs' && req.method === 'GET') {
+      return json(res, 200, queryLogs({
+        apiId: url.searchParams.get('apiId') || undefined,
+        statusClass: url.searchParams.get('statusClass') || undefined,
+        appName: url.searchParams.get('appName') || undefined,
+        keyword: url.searchParams.get('keyword') || undefined,
+        page: Math.max(1, Number(url.searchParams.get('page') ?? 1)),
+        pageSize: Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 20))),
+      }))
     }
 
     if (resource === 'reset' && req.method === 'POST') {

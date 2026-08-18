@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import {
-  ArrowLeft, Pencil, ArrowUpCircle, ArrowDownCircle, Ban, Trash2, Play, Loader2, Copy, Check,
+  ArrowLeft, Pencil, ArrowUpCircle, ArrowDownCircle, Ban, Trash2, Play, Loader2, Copy, Check, ScrollText,
 } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, LineChart, Line,
@@ -156,6 +156,9 @@ export default function ApiDetail() {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate(`/logs?apiId=${api.id}`)}>
+            <ScrollText className="mr-1 h-4 w-4" /> 调用日志
+          </Button>
           <Button variant="outline" onClick={() => navigate(`/apis/${api.id}/edit`)}>
             <Pencil className="mr-1 h-4 w-4" /> 编辑
           </Button>
