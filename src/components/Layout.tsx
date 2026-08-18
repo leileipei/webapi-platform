@@ -1,10 +1,17 @@
-import { NavLink, Outlet } from 'react-router'
+import { NavLink, Navigate, Outlet, useNavigate } from 'react-router'
+import { useState } from 'react'
 import {
   LayoutDashboard, Globe, FolderTree, KeyRound, Activity, Plus, RefreshCw, ShieldCheck,
+  CircleUserRound, LogOut, LockKeyhole,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/lib/store'
+import { apiClient, authStorage } from '@/lib/api'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
@@ -18,9 +25,76 @@ const NAV = [
   { to: '/monitor', label: '监控告警', icon: Activity },
 ]
 
+function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const navigate = useNavigate()
+  const [oldPassword, setOldPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async () => {
+    if (newPassword.length < 8) return toast.error('新密码至少 8 位')
+    if (newPassword !== confirm) return toast.error('两次输入的新密码不一致')
+    setSaving(true)
+    try {
+      await apiClient.post('/admin/auth/password', { oldPassword, newPassword })
+      toast.success('密码已修改，请重新登录')
+      authStorage.clear()
+      navigate('/login', { replace: true })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '修改失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>修改密码</DialogTitle>
+          <DialogDescription>修改成功后所有会话将失效，需要重新登录</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>原密码</Label>
+            <Input type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} autoComplete="current-password" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>新密码（至少 8 位）</Label>
+            <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>确认新密码</Label>
+            <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button onClick={submit} disabled={saving}>确认修改</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export default function Layout() {
   const { state, dispatch, ready, loadError, reload } = useStore()
+  const navigate = useNavigate()
+  const [pwdOpen, setPwdOpen] = useState(false)
   const unacked = state.alertRecords.filter((r) => !r.acked).length
+
+  if (!authStorage.getToken()) return <Navigate to="/login" replace />
+
+  const doLogout = async () => {
+    try {
+      await apiClient.post('/admin/auth/logout', {})
+    } catch {
+      // 会话可能已过期，本地照常清理
+    }
+    authStorage.clear()
+    navigate('/login', { replace: true })
+  }
 
   if (!ready) {
     return (
@@ -113,8 +187,22 @@ export default function Layout() {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+
+          {/* 当前用户 */}
+          <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2">
+            <CircleUserRound className="h-4 w-4 shrink-0 text-slate-400" />
+            <span className="flex-1 truncate text-xs text-slate-300">{authStorage.getUser() ?? 'admin'}</span>
+            <button title="修改密码" onClick={() => setPwdOpen(true)} className="text-slate-400 hover:text-white">
+              <LockKeyhole className="h-3.5 w-3.5" />
+            </button>
+            <button title="退出登录" onClick={doLogout} className="text-slate-400 hover:text-red-400">
+              <LogOut className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
       </aside>
+
+      <ChangePasswordDialog open={pwdOpen} onOpenChange={setPwdOpen} />
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto">

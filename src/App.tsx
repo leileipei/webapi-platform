@@ -2,6 +2,7 @@ import { Routes, Route } from 'react-router'
 import { Toaster } from '@/components/ui/sonner'
 import { StoreProvider } from '@/lib/store'
 import Layout from '@/components/Layout'
+import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import ApiList from '@/pages/ApiList'
 import ApiForm from '@/pages/ApiForm'
@@ -14,6 +15,7 @@ export default function App() {
   return (
     <StoreProvider>
       <Routes>
+        <Route path="/login" element={<Login />} />
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/apis" element={<ApiList />} />

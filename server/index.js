@@ -2,6 +2,9 @@
 // 零第三方依赖：node:http + node:sqlite
 import http from 'node:http'
 import { store, recordMetric, queryMetrics, apiCallStats, seedAll } from './db.js'
+import { ensureAdmin, login, verify, logout, changePassword } from './auth.js'
+
+ensureAdmin()
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3100
 
@@ -317,6 +320,34 @@ async function handleAdmin(req, res, url) {
   const sub = parts[3]
 
   try {
+    // ---- 认证接口（登录公开，其余需会话） ----
+    if (resource === 'auth') {
+      if (id === 'login' && req.method === 'POST') {
+        const { username, password } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
+        if (!username || !password) return json(res, 400, { message: '请输入用户名和密码' })
+        const result = login(String(username), String(password))
+        if (!result) return json(res, 401, { message: '用户名或密码错误' })
+        return json(res, 200, result)
+      }
+      const session = verify(req)
+      if (!session) return json(res, 401, { message: '未登录或会话已过期' })
+      if (id === 'me' && req.method === 'GET') return json(res, 200, { username: session.username })
+      if (id === 'logout' && req.method === 'POST') {
+        logout(session.token)
+        return json(res, 200, { ok: true })
+      }
+      if (id === 'password' && req.method === 'POST') {
+        const { oldPassword, newPassword } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
+        const r = changePassword(session.username, String(oldPassword ?? ''), String(newPassword ?? ''))
+        return json(res, r.ok ? 200 : 400, r)
+      }
+      return json(res, 404, { message: '未知认证接口' })
+    }
+
+    // ---- 其余管理接口一律要求登录 ----
+    const session = verify(req)
+    if (!session) return json(res, 401, { message: '未登录或会话已过期' })
+
     if (resource === 'state' && req.method === 'GET') return json(res, 200, fullState())
 
     if (resource === 'metrics' && req.method === 'GET') {
@@ -382,7 +413,7 @@ async function handleAdmin(req, res, url) {
     return json(res, 404, { message: '未知管理接口' })
   } catch (err) {
     console.error('[admin error]', err)
-    return json(res, 400, { message: '请求处理失败：' + (err?.message ?? 'unknown') })
+    return json(res, err?.status ?? 400, { message: '请求处理失败：' + (err?.message ?? 'unknown') })
   }
 }
 
