@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: 前端构建（tsc + vite build）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查 + 生产构建
+        run: npm run build
+
+  backend-smoke:
+    name: 后端冒烟（启动 + 健康检查 + 登录）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 启动后端并验证
+        run: |
+          node server/index.js &
+          SERVER_PID=$!
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3100/healthz && break
+            sleep 0.5
+          done
+          # 未登录访问管理接口应返回 401
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3100/admin/state)
+          [ "$code" = "401" ] || { echo "期望 401，实际 $code"; exit 1; }
+          # 默认管理员登录应成功
+          token=$(curl -s -X POST http://localhost:3100/admin/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"Admin@123"}' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).token))")
+          [ -n "$token" ] || { echo "登录失败"; exit 1; }
+          # 带令牌访问应返回 200
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" http://localhost:3100/admin/state)
+          [ "$code" = "200" ] || { echo "期望 200，实际 $code"; exit 1; }
+          kill $SERVER_PID
+          echo "后端冒烟测试通过"
