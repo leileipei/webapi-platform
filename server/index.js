@@ -460,6 +460,45 @@ async function handleAdmin(req, res, url) {
       return json(res, 200, { ok: true })
     }
 
+    // 连通性测试：POST /admin/test { url, method?, timeoutMs? }
+    // 注册/编辑 API 时验证后端地址是否可达；能收到任意 HTTP 响应即视为可达
+    if (resource === 'test' && req.method === 'POST') {
+      const { url: target, method, timeoutMs } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
+      let parsed
+      try {
+        parsed = new URL(String(target ?? ''))
+      } catch {
+        return json(res, 400, { message: 'URL 格式不正确' })
+      }
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return json(res, 400, { message: '仅支持 http/https 协议' })
+      }
+      const t0 = performance.now()
+      const latency = () => Math.round(performance.now() - t0)
+      try {
+        const resp = await fetch(parsed, {
+          method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'].includes(method) ? method : 'GET',
+          signal: AbortSignal.timeout(Math.min(Number(timeoutMs) || 5000, 30000)),
+          redirect: 'manual',
+          headers: { 'User-Agent': 'WebAPI-Platform-ConnectivityCheck/1.0' },
+        })
+        const buf = Buffer.from(await resp.arrayBuffer())
+        return json(res, 200, {
+          reachable: true,
+          status: resp.status,
+          latency: latency(),
+          bodyPreview: buf.toString('utf-8').slice(0, 300),
+        })
+      } catch (err) {
+        const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+        return json(res, 200, {
+          reachable: false,
+          latency: latency(),
+          error: isTimeout ? `连接超时（>${Number(timeoutMs) || 5000}ms）` : `连接失败：${err?.cause?.code ?? err?.message ?? 'unknown'}`,
+        })
+      }
+    }
+
     // 状态流转：POST /admin/apis/:id/status {status}
     if (resource === 'apis' && id && sub === 'status' && req.method === 'POST') {
       const { status } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')

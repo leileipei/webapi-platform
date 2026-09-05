@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, PlugZap, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,7 +11,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useStore, newId } from '@/lib/store'
+import { apiClient } from '@/lib/api'
 import type { ApiItem, HttpMethod, AuthType, Protocol, ParamDoc } from '@/types'
+
+interface TestResult {
+  reachable: boolean
+  status?: number
+  latency: number
+  error?: string
+  bodyPreview?: string
+}
 
 const emptyParam: ParamDoc = { name: '', type: 'string', required: false, description: '' }
 
@@ -92,6 +101,36 @@ export default function ApiForm() {
 
   const [form, setForm] = useState<Omit<ApiItem, 'id'>>(() => defaultApi(state.groups[0]?.id ?? ''))
   const [publishNow, setPublishNow] = useState(true)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<TestResult | null>(null)
+
+  const testConnectivity = async () => {
+    if (!/^https?:\/\/.+/.test(form.backendUrl.trim())) {
+      toast.error('请先填写合法的 http(s):// 后端服务地址')
+      return
+    }
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await apiClient.post<TestResult>('/admin/test', {
+        url: form.backendUrl.trim(),
+        method: form.method,
+        timeoutMs: form.timeout,
+      })
+      setTestResult(r)
+      if (r.reachable) {
+        toast.success(`连通正常：HTTP ${r.status} · ${r.latency}ms`)
+      } else {
+        toast.error(`连接失败：${r.error}`)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '请求失败'
+      setTestResult({ reachable: false, latency: 0, error: msg })
+      toast.error(msg)
+    } finally {
+      setTesting(false)
+    }
+  }
 
   useEffect(() => {
     if (existing) {
@@ -238,7 +277,32 @@ export default function ApiForm() {
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label>后端服务地址 *</Label>
-            <Input value={form.backendUrl} onChange={(e) => set('backendUrl', e.target.value)} className="font-mono" placeholder="http://10.0.0.11:8080/service/path" />
+            <div className="flex gap-2">
+              <Input
+                value={form.backendUrl}
+                onChange={(e) => { set('backendUrl', e.target.value); setTestResult(null) }}
+                className="font-mono"
+                placeholder="http://10.0.0.11:8080/service/path"
+              />
+              <Button type="button" variant="outline" onClick={testConnectivity} disabled={testing} className="shrink-0">
+                {testing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
+                测试连接
+              </Button>
+            </div>
+            {testResult && (
+              <div className={`mt-2 rounded-lg p-3 text-xs ${testResult.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                <div className="flex items-center gap-1.5 font-medium">
+                  {testResult.reachable ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+                  {testResult.reachable
+                    ? `连通正常 · HTTP ${testResult.status} · 延迟 ${testResult.latency}ms`
+                    : `无法连通 · ${testResult.error}`}
+                </div>
+                {testResult.reachable && testResult.bodyPreview && (
+                  <pre className="mt-2 max-h-24 overflow-auto rounded bg-white/60 p-2 font-mono text-[11px] text-slate-600">{testResult.bodyPreview}</pre>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-slate-400">支持 {'{param}'} 占位符，网关转发时会用路径中的实际值替换。保存前建议先测试连接。</p>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-1.5">
