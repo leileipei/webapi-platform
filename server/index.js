@@ -5,9 +5,11 @@ import { existsSync, statSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics } from './db.js'
-import { ensureAdmin, login, verify, logout, changePassword } from './auth.js'
+import { ensureAdmin, login, verify, logout, changePassword, hasRole, listUsers, upsertUser, deleteUser } from './auth.js'
+import { runArchive, listArchives, openArchive, startArchiver, RETENTION_DAYS } from './archive.js'
 
 ensureAdmin()
+startArchiver()
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3100
 // 默认绑定所有网卡，局域网内其他计算机可通过 http://<本机IP>:3100 访问
@@ -409,7 +411,7 @@ async function handleAdmin(req, res, url) {
       }
       const session = verify(req)
       if (!session) return json(res, 401, { message: '未登录或会话已过期' })
-      if (id === 'me' && req.method === 'GET') return json(res, 200, { username: session.username })
+      if (id === 'me' && req.method === 'GET') return json(res, 200, { username: session.username, role: session.role })
       if (id === 'logout' && req.method === 'POST') {
         logout(session.token)
         return json(res, 200, { ok: true })
@@ -425,6 +427,46 @@ async function handleAdmin(req, res, url) {
     // ---- 其余管理接口一律要求登录 ----
     const session = verify(req)
     if (!session) return json(res, 401, { message: '未登录或会话已过期' })
+
+    // ---- 接口级角色控制：viewer 只读 / operator 可注册、发布、编辑、确认告警 / admin 全部 ----
+    const needRole = (minRole) => {
+      if (hasRole(session, minRole)) return true
+      json(res, 403, { message: `权限不足：该操作需要 ${minRole} 及以上角色` })
+      return false
+    }
+
+    // ---- 用户管理（仅 admin） ----
+    if (resource === 'users') {
+      if (!needRole('admin')) return
+      if (req.method === 'GET' && !id) return json(res, 200, listUsers())
+      if (req.method === 'POST' && !id) {
+        const { username, password, role } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
+        const r = upsertUser({ username: String(username ?? ''), password: password ? String(password) : undefined, role })
+        return json(res, r.ok ? 200 : 400, r)
+      }
+      if (req.method === 'DELETE' && id) {
+        const r = deleteUser(id, session.username)
+        return json(res, r.ok ? 200 : 400, r)
+      }
+      return json(res, 404, { message: '未知用户接口' })
+    }
+
+    // ---- 日志归档（仅 admin） ----
+    if (resource === 'archives') {
+      if (!needRole('admin')) return
+      if (req.method === 'GET' && id === 'download') {
+        const stream = openArchive(url.searchParams.get('file'))
+        if (!stream) return json(res, 404, { message: '归档文件不存在' })
+        res.writeHead(200, {
+          'Content-Type': 'application/gzip',
+          'Content-Disposition': `attachment; filename="${url.searchParams.get('file')}"`,
+        })
+        return stream.pipe(res)
+      }
+      if (req.method === 'GET' && !id) return json(res, 200, { retentionDays: RETENTION_DAYS, files: listArchives() })
+      if (req.method === 'POST' && id === 'run') return json(res, 200, await runArchive())
+      return json(res, 404, { message: '未知归档接口' })
+    }
 
     if (resource === 'state' && req.method === 'GET') return json(res, 200, fullState())
 
@@ -452,6 +494,7 @@ async function handleAdmin(req, res, url) {
     }
 
     if (resource === 'reset' && req.method === 'POST') {
+      if (!needRole('admin')) return
       seedAll()
       recentCalls.clear()
       cbWindows.clear()
@@ -463,6 +506,7 @@ async function handleAdmin(req, res, url) {
     // 连通性测试：POST /admin/test { url, method?, timeoutMs? }
     // 注册/编辑 API 时验证后端地址是否可达；能收到任意 HTTP 响应即视为可达
     if (resource === 'test' && req.method === 'POST') {
+      if (!needRole('operator')) return
       const { url: target, method, timeoutMs } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
       let parsed
       try {
@@ -501,6 +545,7 @@ async function handleAdmin(req, res, url) {
 
     // 状态流转：POST /admin/apis/:id/status {status}
     if (resource === 'apis' && id && sub === 'status' && req.method === 'POST') {
+      if (!needRole('operator')) return
       const { status } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
       const api = store.get('apis', id)
       if (!api) return json(res, 404, { message: 'API 不存在' })
@@ -515,6 +560,7 @@ async function handleAdmin(req, res, url) {
     const kind = kindMap[resource]
 
     if (kind && req.method === 'POST' && !id) {
+      if (!needRole('operator')) return
       const obj = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
       if (!obj.id) return json(res, 400, { message: '缺少 id' })
       store.upsert(kind, obj)
@@ -523,6 +569,7 @@ async function handleAdmin(req, res, url) {
     }
 
     if (kind && req.method === 'DELETE' && id) {
+      if (!needRole('admin')) return
       store.remove(kind, id)
       if (kind === 'apis') {
         // 联动移除应用授权
@@ -537,6 +584,7 @@ async function handleAdmin(req, res, url) {
     }
 
     if (resource === 'alerts' && id && sub === 'ack' && req.method === 'POST') {
+      if (!needRole('operator')) return
       const alert = store.get('alerts', id)
       if (!alert) return json(res, 404, { message: '告警不存在' })
       alert.acked = 1

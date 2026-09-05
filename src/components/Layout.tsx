@@ -2,24 +2,25 @@ import { NavLink, Navigate, Outlet, useNavigate } from 'react-router'
 import { useState } from 'react'
 import {
   LayoutDashboard, Globe, FolderTree, KeyRound, Activity, Plus, ShieldCheck,
-  CircleUserRound, LogOut, LockKeyhole, ScrollText,
+  CircleUserRound, LogOut, LockKeyhole, ScrollText, Settings as SettingsIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/lib/store'
-import { apiClient, authStorage } from '@/lib/api'
+import { apiClient, authStorage, ROLE_LABEL } from '@/lib/api'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-const NAV = [
+const NAV: { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean; adminOnly?: boolean }[] = [
   { to: '/', label: '概览', icon: LayoutDashboard, end: true },
   { to: '/apis', label: 'API 管理', icon: Globe },
   { to: '/groups', label: '分组管理', icon: FolderTree },
   { to: '/apps', label: '应用与密钥', icon: KeyRound },
   { to: '/monitor', label: '监控告警', icon: Activity },
   { to: '/logs', label: '调用日志', icon: ScrollText },
+  { to: '/settings', label: '系统管理', icon: SettingsIcon, adminOnly: true },
 ]
 
 function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
@@ -80,6 +81,8 @@ export default function Layout() {
   const navigate = useNavigate()
   const [pwdOpen, setPwdOpen] = useState(false)
   const unacked = state.alertRecords.filter((r) => !r.acked).length
+  const role = authStorage.getRole()
+  const isViewer = role === 'viewer'
 
   if (!authStorage.getToken()) return <Navigate to="/login" replace />
 
@@ -131,7 +134,7 @@ export default function Layout() {
           </div>
         </div>
         <nav className="mt-2 flex-1 space-y-1 px-3">
-          {NAV.map((item) => (
+          {NAV.filter((item) => !item.adminOnly || role === 'admin').map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -154,17 +157,22 @@ export default function Layout() {
           ))}
         </nav>
         <div className="space-y-2 px-3 pb-5">
-          <NavLink
-            to="/apis/new"
-            className="flex items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2.5 text-sm font-medium text-white hover:bg-blue-600"
-          >
-            <Plus className="h-4 w-4" /> 注册新 API
-          </NavLink>
+          {!isViewer && (
+            <NavLink
+              to="/apis/new"
+              className="flex items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2.5 text-sm font-medium text-white hover:bg-blue-600"
+            >
+              <Plus className="h-4 w-4" /> 注册新 API
+            </NavLink>
+          )}
 
           {/* 当前用户 */}
           <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2">
             <CircleUserRound className="h-4 w-4 shrink-0 text-slate-400" />
-            <span className="flex-1 truncate text-xs text-slate-300">{authStorage.getUser() ?? 'admin'}</span>
+            <span className="flex-1 truncate text-xs text-slate-300">
+              {authStorage.getUser() ?? 'admin'}
+              <span className="ml-1.5 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300">{ROLE_LABEL[role]}</span>
+            </span>
             <button title="修改密码" onClick={() => setPwdOpen(true)} className="text-slate-400 hover:text-white">
               <LockKeyhole className="h-3.5 w-3.5" />
             </button>

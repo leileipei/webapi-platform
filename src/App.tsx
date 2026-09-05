@@ -11,6 +11,7 @@ import Groups from '@/pages/Groups'
 import Apps from '@/pages/Apps'
 import Monitor from '@/pages/Monitor'
 import Logs from '@/pages/Logs'
+import Settings from '@/pages/Settings'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/apps" element={<Apps />} />
           <Route path="/monitor" element={<Monitor />} />
           <Route path="/logs" element={<Logs />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
       <Toaster richColors position="top-right" />

@@ -4,17 +4,29 @@ import type { MetricPoint } from '@/types'
 
 const TOKEN_KEY = 'webapi-admin-token'
 const USER_KEY = 'webapi-admin-user'
+const ROLE_KEY = 'webapi-admin-role'
+
+export type Role = 'viewer' | 'operator' | 'admin'
+
+export const ROLE_LABEL: Record<Role, string> = {
+  viewer: '只读',
+  operator: '操作员',
+  admin: '管理员',
+}
 
 export const authStorage = {
   getToken: () => localStorage.getItem(TOKEN_KEY),
   getUser: () => localStorage.getItem(USER_KEY),
-  save: (token: string, username: string) => {
+  getRole: (): Role => (localStorage.getItem(ROLE_KEY) as Role) || 'admin',
+  save: (token: string, username: string, role?: string) => {
     localStorage.setItem(TOKEN_KEY, token)
     localStorage.setItem(USER_KEY, username)
+    localStorage.setItem(ROLE_KEY, role ?? 'admin')
   },
   clear: () => {
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+    localStorage.removeItem(ROLE_KEY)
   },
 }
 
@@ -43,6 +55,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
+  get: <T>(url: string) => request<T>(url),
   getState: <T>() => request<T>('/admin/state'),
   post: <T>(url: string, body: unknown) => request<T>(url, { method: 'POST', body: JSON.stringify(body) }),
   del: <T>(url: string) => request<T>(url, { method: 'DELETE' }),

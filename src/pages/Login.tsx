@@ -25,11 +25,11 @@ export default function Login() {
     setLoading(true)
     setError('')
     try {
-      const r = await apiClient.post<{ token: string; username: string }>('/admin/auth/login', {
+      const r = await apiClient.post<{ token: string; username: string; role: string }>('/admin/auth/login', {
         username: username.trim(),
         password,
       })
-      authStorage.save(r.token, r.username)
+      authStorage.save(r.token, r.username, r.role)
       reload()
       navigate('/', { replace: true })
     } catch (err) {
