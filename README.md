@@ -54,6 +54,11 @@ npm run server     # 启动一体化服务（默认绑定 0.0.0.0:3100）
 
 > 防火墙提示：若其他计算机无法访问，请确认服务器防火墙放行了对应端口（如 macOS 系统设置 → 网络 → 防火墙）。
 
+**Windows / IIS 部署**：本系统不是纯静态站点，仅把 `dist/` 挂到 IIS 会在登录/加载数据时报 405。正确做法：
+
+1. 在服务器安装 Node.js 24+，运行 `npm run server`（后端监听 3100 并可直接对外提供全部功能，此时可不使用 IIS）；
+2. 若必须经 IIS（如占用 80 端口）：安装 **URL Rewrite** 与 **Application Request Routing (ARR)** 扩展，在 ARR 中勾选 *Enable proxy*，并确保 `dist/` 中的 `web.config`（已随构建自动输出）保留在站点根目录——它会将 `/admin/*` 与 `/gw/*` 反向代理到本机 Node 后端。
+
 ## 目录结构
 
 ```
