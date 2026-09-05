@@ -14,38 +14,55 @@ mkdirSync(ARCHIVE_DIR, { recursive: true })
 /** 日志保留天数，可用环境变量 LOG_RETENTION_DAYS 覆盖 */
 export const RETENTION_DAYS = Math.max(1, Number(process.env.LOG_RETENTION_DAYS ?? 30))
 
-/** 执行一次归档：把保留期之前的日志写入压缩文件并删除，返回归档结果 */
-export async function runArchive() {
+/** 通用导出：把某张表保留期之前的记录写入压缩文件并删除，返回 {archived, file} */
+async function exportOldRows(table, filePrefix) {
   const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString().replace('T', ' ').slice(0, 19)
-  const rows = db.prepare('SELECT * FROM logs WHERE ts < ? ORDER BY id').all(cutoff)
+  const rows = db.prepare(`SELECT * FROM ${table} WHERE ts < ? ORDER BY id`).all(cutoff)
   if (rows.length === 0) return { archived: 0, file: null }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const fileName = `logs-archive-${stamp}.ndjson.gz`
+  const fileName = `${filePrefix}-${stamp}.ndjson.gz`
   const filePath = join(ARCHIVE_DIR, fileName)
 
   const ndjson = rows.map((r) => JSON.stringify(r)).join('\n') + '\n'
   await pipeline(Readable.from(ndjson), createGzip(), createWriteStream(filePath))
 
-  db.prepare('DELETE FROM logs WHERE ts < ?').run(cutoff)
-  console.log(`[archive] 已归档 ${rows.length} 条日志 → ${fileName}`)
+  db.prepare(`DELETE FROM ${table} WHERE ts < ?`).run(cutoff)
+  console.log(`[archive] 已归档 ${rows.length} 条 ${table} → ${fileName}`)
   return { archived: rows.length, file: fileName }
 }
 
-/** 列出归档文件（名称、大小、条数不可知、修改时间） */
+/** 执行一次归档：超期的调用日志与操作审计日志分别压缩导出后从库中删除 */
+export async function runArchive() {
+  const logs = await exportOldRows('logs', 'logs-archive')
+  const audits = await exportOldRows('audit_logs', 'audit-archive')
+  return {
+    archived: logs.archived,
+    file: logs.file,
+    auditArchived: audits.archived,
+    auditFile: audits.file,
+  }
+}
+
+/** 列出归档文件（名称、类型、大小、修改时间） */
 export function listArchives() {
   return readdirSync(ARCHIVE_DIR)
-    .filter((f) => f.startsWith('logs-archive-') && f.endsWith('.ndjson.gz'))
+    .filter((f) => /^(logs|audit)-archive-.*\.ndjson\.gz$/.test(f))
     .map((f) => {
       const st = statSync(join(ARCHIVE_DIR, f))
-      return { name: f, size: st.size, createdAt: st.mtime.toISOString().replace('T', ' ').slice(0, 19) }
+      return {
+        name: f,
+        type: f.startsWith('audit-') ? 'audit' : 'logs',
+        size: st.size,
+        createdAt: st.mtime.toISOString().replace('T', ' ').slice(0, 19),
+      }
     })
     .sort((a, b) => (a.name < b.name ? 1 : -1))
 }
 
 /** 校验归档文件名并返回可读流；非法名称返回 null（防目录穿越） */
 export function openArchive(name) {
-  if (!/^logs-archive-[\dT\-]+\.ndjson\.gz$/.test(String(name ?? ''))) return null
+  if (!/^(logs|audit)-archive-[\dT\-]+\.ndjson\.gz$/.test(String(name ?? ''))) return null
   const filePath = join(ARCHIVE_DIR, name)
   try {
     statSync(filePath)

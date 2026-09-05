@@ -24,6 +24,7 @@ interface UserRow {
 
 interface ArchiveFile {
   name: string
+  type: 'logs' | 'audit'
   size: number
   createdAt: string
 }
@@ -145,8 +146,13 @@ export default function Settings() {
   const runArchive = async () => {
     setArchiving(true)
     try {
-      const r = await apiClient.post<{ archived: number; file: string | null }>('/admin/archives/run', {})
-      toast.success(r.archived > 0 ? `已归档 ${r.archived} 条日志 → ${r.file}` : '没有超过保留期的日志需要归档')
+      const r = await apiClient.post<{ archived: number; auditArchived: number; file: string | null }>('/admin/archives/run', {})
+      const total = r.archived + (r.auditArchived ?? 0)
+      toast.success(
+        total > 0
+          ? `已归档调用日志 ${r.archived} 条、审计日志 ${r.auditArchived ?? 0} 条`
+          : '没有超过保留期的日志需要归档',
+      )
       fetchArchives()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '归档失败')
@@ -237,7 +243,7 @@ export default function Settings() {
           <div>
             <CardTitle className="flex items-center gap-2 text-base"><Archive className="h-4 w-4" /> 日志自动归档</CardTitle>
             <CardDescription>
-              调用日志保留 {retentionDays} 天，超期日志每天自动压缩归档（gzip NDJSON）并从库中清除。可用环境变量 LOG_RETENTION_DAYS 调整保留期。
+              调用日志与操作审计日志均保留 {retentionDays} 天，超期记录每天自动压缩归档（gzip NDJSON）并从库中清除。可用环境变量 LOG_RETENTION_DAYS 调整保留期。
             </CardDescription>
           </div>
           <div className="flex gap-2">
@@ -254,6 +260,7 @@ export default function Settings() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-24">类型</TableHead>
                   <TableHead>文件名</TableHead>
                   <TableHead className="w-28">大小</TableHead>
                   <TableHead className="w-44">归档时间</TableHead>
@@ -263,6 +270,11 @@ export default function Settings() {
               <TableBody>
                 {archives.map((f) => (
                   <TableRow key={f.name}>
+                    <TableCell>
+                      <Badge variant="outline" className={f.type === 'audit' ? 'border-amber-200 bg-amber-50 text-amber-600' : 'border-blue-200 bg-blue-50 text-blue-600'}>
+                        {f.type === 'audit' ? '审计' : '调用'}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="font-mono text-xs">{f.name}</TableCell>
                     <TableCell className="text-sm text-slate-500">{fmtSize(f.size)}</TableCell>
                     <TableCell className="text-sm text-slate-500">{toLocal(f.createdAt)}</TableCell>

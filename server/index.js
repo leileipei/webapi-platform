@@ -479,7 +479,8 @@ async function handleAdmin(req, res, url) {
       if (req.method === 'GET' && !id) return json(res, 200, { retentionDays: RETENTION_DAYS, files: listArchives() })
       if (req.method === 'POST' && id === 'run') {
         const r = await runArchive()
-        audit('手动归档', r.file, `归档 ${r.archived} 条日志`)
+        audit('手动归档', [r.file, r.auditFile].filter(Boolean).join('、') || null,
+          `归档调用日志 ${r.archived} 条、审计日志 ${r.auditArchived} 条`)
         return json(res, 200, r)
       }
       return json(res, 404, { message: '未知归档接口' })
