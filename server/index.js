@@ -4,7 +4,7 @@ import http from 'node:http'
 import { existsSync, statSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics } from './db.js'
+import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics, addAudit, queryAudit } from './db.js'
 import { ensureAdmin, login, verify, logout, changePassword, hasRole, listUsers, upsertUser, deleteUser } from './auth.js'
 import { runArchive, listArchives, openArchive, startArchiver, RETENTION_DAYS } from './archive.js'
 
@@ -406,7 +406,11 @@ async function handleAdmin(req, res, url) {
         const { username, password } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
         if (!username || !password) return json(res, 400, { message: '请输入用户名和密码' })
         const result = login(String(username), String(password))
-        if (!result) return json(res, 401, { message: '用户名或密码错误' })
+        if (!result) {
+          addAudit({ username: String(username), action: '登录失败', ip: req.socket.remoteAddress })
+          return json(res, 401, { message: '用户名或密码错误' })
+        }
+        addAudit({ username: result.username, role: result.role, action: '登录成功', ip: req.socket.remoteAddress })
         return json(res, 200, result)
       }
       const session = verify(req)
@@ -414,11 +418,13 @@ async function handleAdmin(req, res, url) {
       if (id === 'me' && req.method === 'GET') return json(res, 200, { username: session.username, role: session.role })
       if (id === 'logout' && req.method === 'POST') {
         logout(session.token)
+        addAudit({ username: session.username, role: session.role, action: '退出登录', ip: req.socket.remoteAddress })
         return json(res, 200, { ok: true })
       }
       if (id === 'password' && req.method === 'POST') {
         const { oldPassword, newPassword } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
         const r = changePassword(session.username, String(oldPassword ?? ''), String(newPassword ?? ''))
+        if (r.ok) addAudit({ username: session.username, role: session.role, action: '修改密码', ip: req.socket.remoteAddress })
         return json(res, r.ok ? 200 : 400, r)
       }
       return json(res, 404, { message: '未知认证接口' })
@@ -435,6 +441,10 @@ async function handleAdmin(req, res, url) {
       return false
     }
 
+    // ---- 审计辅助：记录当前会话的管理操作 ----
+    const audit = (action, target, detail) =>
+      addAudit({ username: session.username, role: session.role, action, target, detail, ip: req.socket.remoteAddress })
+
     // ---- 用户管理（仅 admin） ----
     if (resource === 'users') {
       if (!needRole('admin')) return
@@ -442,10 +452,12 @@ async function handleAdmin(req, res, url) {
       if (req.method === 'POST' && !id) {
         const { username, password, role } = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
         const r = upsertUser({ username: String(username ?? ''), password: password ? String(password) : undefined, role })
+        if (r.ok) audit('保存用户', String(username ?? ''), `角色 ${role}${password ? '，重置密码' : ''}`)
         return json(res, r.ok ? 200 : 400, r)
       }
       if (req.method === 'DELETE' && id) {
         const r = deleteUser(id, session.username)
+        if (r.ok) audit('删除用户', id)
         return json(res, r.ok ? 200 : 400, r)
       }
       return json(res, 404, { message: '未知用户接口' })
@@ -457,6 +469,7 @@ async function handleAdmin(req, res, url) {
       if (req.method === 'GET' && id === 'download') {
         const stream = openArchive(url.searchParams.get('file'))
         if (!stream) return json(res, 404, { message: '归档文件不存在' })
+        audit('下载归档', url.searchParams.get('file'))
         res.writeHead(200, {
           'Content-Type': 'application/gzip',
           'Content-Disposition': `attachment; filename="${url.searchParams.get('file')}"`,
@@ -464,8 +477,23 @@ async function handleAdmin(req, res, url) {
         return stream.pipe(res)
       }
       if (req.method === 'GET' && !id) return json(res, 200, { retentionDays: RETENTION_DAYS, files: listArchives() })
-      if (req.method === 'POST' && id === 'run') return json(res, 200, await runArchive())
+      if (req.method === 'POST' && id === 'run') {
+        const r = await runArchive()
+        audit('手动归档', r.file, `归档 ${r.archived} 条日志`)
+        return json(res, 200, r)
+      }
       return json(res, 404, { message: '未知归档接口' })
+    }
+
+    // ---- 操作审计查询（仅 admin） ----
+    if (resource === 'audit-logs' && req.method === 'GET') {
+      if (!needRole('admin')) return
+      return json(res, 200, queryAudit({
+        username: url.searchParams.get('username') || undefined,
+        keyword: url.searchParams.get('keyword') || undefined,
+        page: Math.max(1, Number(url.searchParams.get('page') ?? 1)),
+        pageSize: Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 20))),
+      }))
     }
 
     if (resource === 'state' && req.method === 'GET') return json(res, 200, fullState())
@@ -500,6 +528,7 @@ async function handleAdmin(req, res, url) {
       cbWindows.clear()
       cbOpenUntil.clear()
       rateBuckets.clear()
+      audit('重置演示数据')
       return json(res, 200, { ok: true })
     }
 
@@ -553,6 +582,7 @@ async function handleAdmin(req, res, url) {
       api.status = status
       api.updatedAt = new Date().toISOString().slice(0, 10)
       store.upsert('apis', api)
+      audit('API 状态流转', api.name, `${api.method} ${api.path} → ${status}`)
       return json(res, 200, api)
     }
 
@@ -563,14 +593,19 @@ async function handleAdmin(req, res, url) {
       if (!needRole('operator')) return
       const obj = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
       if (!obj.id) return json(res, 400, { message: '缺少 id' })
+      const isNew = !store.get(kind, obj.id)
       store.upsert(kind, obj)
-      // 删除 API 时联动清理应用授权（前端已保证，后端兜底）
+      const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
+      audit(`${isNew ? '新建' : '更新'}${kindLabel}`, obj.name ?? obj.id)
       return json(res, 200, obj)
     }
 
     if (kind && req.method === 'DELETE' && id) {
       if (!needRole('admin')) return
+      const existed = store.get(kind, id)
       store.remove(kind, id)
+      const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
+      audit(`删除${kindLabel}`, existed?.name ?? id)
       if (kind === 'apis') {
         // 联动移除应用授权
         for (const app of store.list('apps')) {
@@ -589,6 +624,7 @@ async function handleAdmin(req, res, url) {
       if (!alert) return json(res, 404, { message: '告警不存在' })
       alert.acked = 1
       store.upsert('alerts', alert)
+      audit('确认告警', alert.ruleName, alert.message)
       return json(res, 200, alert)
     }
 

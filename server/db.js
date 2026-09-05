@@ -41,6 +41,17 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs (ts);
 CREATE INDEX IF NOT EXISTS idx_logs_api ON logs (api_id);
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts       TEXT NOT NULL,
+  username TEXT NOT NULL,
+  role     TEXT,
+  action   TEXT NOT NULL,
+  target   TEXT,
+  detail   TEXT,
+  ip       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs (ts);
 `)
 
 const upsertStmt = {
@@ -102,6 +113,36 @@ export function addLog(entry) {
   if (count > MAX_LOGS) {
     db.prepare('DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id ASC LIMIT ?)').run(count - MAX_LOGS)
   }
+}
+
+const MAX_AUDIT_LOGS = 50000
+
+/** 记录一条管理操作审计日志，超容量时修剪最旧记录 */
+export function addAudit({ username, role, action, target, detail, ip }) {
+  db.prepare(
+    'INSERT INTO audit_logs (ts, username, role, action, target, detail, ip) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    new Date().toISOString().replace('T', ' ').slice(0, 19),
+    username, role ?? null, action, target ?? null, detail ?? null, ip ?? null,
+  )
+  const count = db.prepare('SELECT COUNT(*) c FROM audit_logs').get().c
+  if (count > MAX_AUDIT_LOGS) {
+    db.prepare('DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs ORDER BY id ASC LIMIT ?)').run(count - MAX_AUDIT_LOGS)
+  }
+}
+
+/** 分页查询审计日志 */
+export function queryAudit({ username, keyword, page = 1, pageSize = 20 }) {
+  const where = []
+  const args = []
+  if (username) { where.push('username = ?'); args.push(username) }
+  if (keyword) { where.push('(action LIKE ? OR target LIKE ? OR detail LIKE ?)'); args.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`) }
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
+  const total = db.prepare(`SELECT COUNT(*) c FROM audit_logs ${whereSql}`).get(...args).c
+  const items = db.prepare(
+    `SELECT * FROM audit_logs ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
+  ).all(...args, pageSize, (page - 1) * pageSize)
+  return { total, page, pageSize, items }
 }
 
 /** 分页查询调用日志 */

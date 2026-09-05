@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate } from 'react-router'
-import { Plus, Pencil, Trash2, Users, Archive, Download, Play, RefreshCw } from 'lucide-react'
+import { Plus, Pencil, Trash2, Users, Archive, Download, Play, RefreshCw, History, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +28,17 @@ interface ArchiveFile {
   createdAt: string
 }
 
+interface AuditRow {
+  id: number
+  ts: string
+  username: string
+  role: Role | null
+  action: string
+  target: string | null
+  detail: string | null
+  ip: string | null
+}
+
 const ROLE_BADGE: Record<Role, string> = {
   admin: 'bg-red-50 text-red-600 border-red-200',
   operator: 'bg-blue-50 text-blue-600 border-blue-200',
@@ -52,6 +63,12 @@ export default function Settings() {
   const [toDelete, setToDelete] = useState<UserRow | null>(null)
   const [saving, setSaving] = useState(false)
 
+  const [audit, setAudit] = useState<{ total: number; items: AuditRow[] }>({ total: 0, items: [] })
+  const [auditPage, setAuditPage] = useState(1)
+  const [auditKeyword, setAuditKeyword] = useState('')
+  const [auditUser, setAuditUser] = useState('')
+  const AUDIT_PAGE_SIZE = 15
+
   const fetchUsers = useCallback(async () => {
     try {
       setUsers(await apiClient.get<UserRow[]>('/admin/users'))
@@ -70,11 +87,27 @@ export default function Settings() {
     }
   }, [])
 
+  const fetchAudit = useCallback(async (page = auditPage) => {
+    try {
+      const params = new URLSearchParams({ page: String(page), pageSize: String(AUDIT_PAGE_SIZE) })
+      if (auditKeyword.trim()) params.set('keyword', auditKeyword.trim())
+      if (auditUser.trim()) params.set('username', auditUser.trim())
+      setAudit(await apiClient.get<{ total: number; items: AuditRow[] }>(`/admin/audit-logs?${params}`))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '加载审计日志失败')
+    }
+  }, [auditPage, auditKeyword, auditUser])
+
   useEffect(() => {
     if (role !== 'admin') return
     fetchUsers()
     fetchArchives()
   }, [role, fetchUsers, fetchArchives])
+
+  useEffect(() => {
+    if (role === 'admin') fetchAudit(auditPage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, auditPage])
 
   if (role !== 'admin') return <Navigate to="/" replace />
 
@@ -242,6 +275,80 @@ export default function Settings() {
                 ))}
               </TableBody>
             </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 操作审计 */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base"><History className="h-4 w-4" /> 操作审计</CardTitle>
+            <CardDescription>记录所有管理操作：登录、增删改、状态流转、归档等，共 {audit.total} 条</CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              className="h-8 w-32" placeholder="用户名"
+              value={auditUser}
+              onChange={(e) => setAuditUser(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (setAuditPage(1), fetchAudit(1))}
+            />
+            <Input
+              className="h-8 w-44" placeholder="关键词（操作/对象/详情）"
+              value={auditKeyword}
+              onChange={(e) => setAuditKeyword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (setAuditPage(1), fetchAudit(1))}
+            />
+            <Button size="sm" variant="outline" onClick={() => { setAuditPage(1); fetchAudit(1) }}>
+              <Search className="mr-1 h-3.5 w-3.5" /> 查询
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => fetchAudit()}><RefreshCw className="h-4 w-4" /></Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {audit.items.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-400">暂无审计记录</p>
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-40">时间</TableHead>
+                    <TableHead className="w-32">用户</TableHead>
+                    <TableHead className="w-32">操作</TableHead>
+                    <TableHead className="w-40">对象</TableHead>
+                    <TableHead>详情</TableHead>
+                    <TableHead className="w-28">IP</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {audit.items.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell className="text-xs text-slate-500">{toLocal(r.ts)}</TableCell>
+                      <TableCell className="text-sm font-medium">
+                        {r.username}
+                        {r.role && <span className="ml-1.5 text-[10px] text-slate-400">{ROLE_LABEL[r.role] ?? r.role}</span>}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={r.action.includes('删除') || r.action.includes('重置') || r.action.includes('失败') ? 'border-red-200 bg-red-50 text-red-600' : 'border-slate-200 bg-slate-50 text-slate-600'}>
+                          {r.action}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-40 truncate text-sm text-slate-600">{r.target ?? '—'}</TableCell>
+                      <TableCell className="max-w-64 truncate text-xs text-slate-500">{r.detail ?? '—'}</TableCell>
+                      <TableCell className="text-xs text-slate-400">{r.ip?.replace('::ffff:', '') ?? '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                <span>第 {auditPage} / {Math.max(1, Math.ceil(audit.total / AUDIT_PAGE_SIZE))} 页</span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" disabled={auditPage <= 1} onClick={() => setAuditPage(auditPage - 1)}>上一页</Button>
+                  <Button size="sm" variant="outline" disabled={auditPage * AUDIT_PAGE_SIZE >= audit.total} onClick={() => setAuditPage(auditPage + 1)}>下一页</Button>
+                </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
