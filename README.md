@@ -43,12 +43,16 @@ npm run dev        # 一键同时启动后端(3100)与前端(3000)，支持 -- -
 curl -H "X-Access-Key: <AccessKey>" http://localhost:3100/gw/api/v1/users/123
 ```
 
-## 构建
+## 构建与部署（局域网 / 服务器）
 
 ```bash
-npm run build      # 前端产物输出到 dist/
-npm run preview    # 本地预览生产构建（后端需另行运行）
+npm run build      # 构建前端产物到 dist/
+npm run server     # 启动一体化服务（默认绑定 0.0.0.0:3100）
 ```
+
+后端启动后会**直接托管前端静态资源**，无需 Nginx：同一局域网内的任意计算机访问 `http://<服务器IP>:3100` 即可使用完整系统（控制台 + 管理 API + 网关）。自定义监听地址：`HOST=0.0.0.0 PORT=8080 node server/index.js`。如需公网访问，请自行在前面加一层 Nginx/HTTPS。
+
+> 防火墙提示：若其他计算机无法访问，请确认服务器防火墙放行了对应端口（如 macOS 系统设置 → 网络 → 防火墙）。
 
 ## 目录结构
 

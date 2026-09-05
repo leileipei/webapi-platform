@@ -1,12 +1,60 @@
-// WebAPI 管理平台后端：管理 API + 真实网关转发 + 内置 mock 上游
+// WebAPI 管理平台后端：管理 API + 真实网关转发 + 内置 mock 上游 + 前端静态托管
 // 零第三方依赖：node:http + node:sqlite
 import http from 'node:http'
+import { existsSync, statSync, readFileSync } from 'node:fs'
+import { dirname, extname, join, normalize } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics } from './db.js'
 import { ensureAdmin, login, verify, logout, changePassword } from './auth.js'
 
 ensureAdmin()
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3100
+// 默认绑定所有网卡，局域网内其他计算机可通过 http://<本机IP>:3100 访问
+const HOST = process.env.HOST ?? '0.0.0.0'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const DIST_DIR = join(__dirname, '..', 'dist')
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.map': 'application/json',
+  '.txt': 'text/plain; charset=utf-8',
+}
+
+/** 托管前端构建产物（dist/），未命中路径回退 index.html（SPA 路由） */
+function serveStatic(req, res, url) {
+  if (!existsSync(DIST_DIR)) {
+    res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' })
+    return res.end('前端尚未构建：请先执行 npm run build，或开发模式使用 npm run dev')
+  }
+  let filePath = normalize(join(DIST_DIR, decodeURIComponent(url.pathname)))
+  // 防目录穿越
+  if (!filePath.startsWith(DIST_DIR)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+    return res.end('forbidden')
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    filePath = join(DIST_DIR, 'index.html')
+  }
+  const body = readFileSync(filePath)
+  res.writeHead(200, {
+    'Content-Type': MIME[extname(filePath).toLowerCase()] ?? 'application/octet-stream',
+    'Cache-Control': filePath.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+  })
+  res.end(body)
+}
 
 /* ---------- 运行时状态（内存） ---------- */
 // 限流：apiId -> { sec, count }
@@ -482,6 +530,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/upstream/') || url.pathname === '/upstream') return await handleUpstream(req, res, url)
     if (url.pathname.startsWith('/gw/') || url.pathname === '/gw') return await handleGateway(req, res, url)
     if (url.pathname === '/healthz') return json(res, 200, { ok: true, uptime: process.uptime() })
+    // 其余 GET 请求交给前端静态托管（SPA）
+    if (req.method === 'GET') return serveStatic(req, res, url)
     return json(res, 404, { message: 'not found' })
   } catch (err) {
     console.error('[server error]', err)
@@ -489,7 +539,7 @@ const server = http.createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, () => {
-  console.log(`[server] WebAPI 管理平台后端已启动: http://localhost:${PORT}`)
-  console.log(`[server] 管理 API: /admin/*  网关入口: /gw/*  mock 上游: /upstream/*`)
+server.listen(PORT, HOST, () => {
+  console.log(`[server] WebAPI 管理平台已启动: http://${HOST}:${PORT}（本机访问 http://localhost:${PORT}）`)
+  console.log(`[server] 控制台: /  管理 API: /admin/*  网关入口: /gw/*  mock 上游: /upstream/*`)
 })
