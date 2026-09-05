@@ -162,6 +162,11 @@ export function revokeSessions(username) {
   for (const [t, s] of sessions) if (s.username === username) sessions.delete(t)
 }
 
+/** 注销全部会话（如恢复含用户表的备份后强制重新登录） */
+export function revokeAllSessions() {
+  sessions.clear()
+}
+
 // 定期清理过期会话
 setInterval(() => {
   const now = Date.now()

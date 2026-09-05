@@ -4,8 +4,8 @@ import http from 'node:http'
 import { existsSync, statSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics, addAudit, queryAudit } from './db.js'
-import { ensureAdmin, login, verify, logout, changePassword, hasRole, listUsers, upsertUser, deleteUser } from './auth.js'
+import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics, addAudit, queryAudit, createBackup, restoreFrom, backupStream, fileSize, removeFile } from './db.js'
+import { ensureAdmin, login, verify, logout, changePassword, hasRole, listUsers, upsertUser, deleteUser, revokeAllSessions } from './auth.js'
 import { runArchive, listArchives, openArchive, startArchiver, RETENTION_DAYS } from './archive.js'
 
 ensureAdmin()
@@ -495,6 +495,43 @@ async function handleAdmin(req, res, url) {
         page: Math.max(1, Number(url.searchParams.get('page') ?? 1)),
         pageSize: Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 20))),
       }))
+    }
+
+    // ---- 数据备份与恢复（仅 admin） ----
+    if (resource === 'backup' && id === 'download' && req.method === 'GET') {
+      if (!needRole('admin')) return
+      const tmpPath = createBackup()
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      audit('下载备份', `webapi-backup-${stamp}.db`, `${(fileSize(tmpPath) / 1024).toFixed(1)} KB`)
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': fileSize(tmpPath),
+        'Content-Disposition': `attachment; filename="webapi-backup-${stamp}.db"`,
+      })
+      const stream = backupStream(tmpPath)
+      stream.pipe(res)
+      stream.on('end', () => removeFile(tmpPath))
+      stream.on('error', () => removeFile(tmpPath))
+      return
+    }
+
+    if (resource === 'backup' && id === 'restore' && req.method === 'POST') {
+      if (!needRole('admin')) return
+      const body = await readBody(req)
+      if (body.length === 0) return json(res, 400, { message: '请上传备份文件' })
+      if (body.length > 200 * 1024 * 1024) return json(res, 400, { message: '备份文件不能超过 200MB' })
+      const includeUsers = url.searchParams.get('users') === '1'
+      const r = restoreFrom(body, { includeUsers })
+      if (!r.ok) return json(res, 400, r)
+      // 运行时内存态与新数据可能不一致，清零重建
+      recentCalls.clear()
+      cbWindows.clear()
+      cbOpenUntil.clear()
+      rateBuckets.clear()
+      // 恢复后审计表已被备份内容替换，追加本次恢复记录
+      audit('恢复备份', null, `恢复 ${r.tables} 张数据表${includeUsers ? '（含用户账号，全部会话已注销）' : ''}`)
+      if (includeUsers) revokeAllSessions()
+      return json(res, 200, { ok: true, tables: r.tables, sessionsRevoked: includeUsers })
     }
 
     if (resource === 'state' && req.method === 'GET') return json(res, 200, fullState())

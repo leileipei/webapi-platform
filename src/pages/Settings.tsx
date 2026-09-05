@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Navigate } from 'react-router'
-import { Plus, Pencil, Trash2, Users, Archive, Download, Play, RefreshCw, History, Search } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Navigate, useNavigate } from 'react-router'
+import { Plus, Pencil, Trash2, Users, Archive, Download, Play, RefreshCw, History, Search, DatabaseBackup, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -69,6 +69,13 @@ export default function Settings() {
   const [auditKeyword, setAuditKeyword] = useState('')
   const [auditUser, setAuditUser] = useState('')
   const AUDIT_PAGE_SIZE = 15
+
+  const navigate = useNavigate()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [restoreFile, setRestoreFile] = useState<File | null>(null)
+  const [restoreUsers, setRestoreUsers] = useState(false)
+  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false)
+  const [restoring, setRestoring] = useState(false)
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -177,6 +184,56 @@ export default function Settings() {
       URL.revokeObjectURL(url)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '下载失败')
+    }
+  }
+
+  const downloadBackup = async () => {
+    try {
+      const token = authStorage.getToken()
+      const res = await fetch('/admin/backup/download', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] ?? 'webapi-backup.db'
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success('备份文件已开始下载')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '备份失败')
+    }
+  }
+
+  const doRestore = async () => {
+    if (!restoreFile) return
+    setRestoring(true)
+    try {
+      const token = authStorage.getToken()
+      const res = await fetch(`/admin/backup/restore${restoreUsers ? '?users=1' : ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: restoreFile,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.message ?? `HTTP ${res.status}`)
+      setRestoreFile(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      if (data.sessionsRevoked) {
+        toast.success('恢复完成（含用户账号），请重新登录')
+        authStorage.clear()
+        navigate('/login', { replace: true })
+        return
+      }
+      toast.success(`恢复完成，共恢复 ${data.tables} 张数据表`)
+      window.location.reload()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '恢复失败')
+    } finally {
+      setRestoring(false)
+      setRestoreConfirmOpen(false)
     }
   }
 
@@ -365,6 +422,45 @@ export default function Settings() {
         </CardContent>
       </Card>
 
+      {/* 数据备份与恢复 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base"><DatabaseBackup className="h-4 w-4" /> 数据备份与恢复</CardTitle>
+          <CardDescription>
+            备份为完整 SQLite 数据库文件（VACUUM INTO 一致性快照，含 API、分组、应用、告警、指标、日志、审计与用户账号）。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Button size="sm" onClick={downloadBackup}><Download className="mr-1 h-4 w-4" /> 下载备份</Button>
+            <span className="text-xs text-slate-400">建议定期下载备份并妥善保存，备份文件包含敏感数据（密钥哈希、AccessKey）</span>
+          </div>
+          <div className="rounded-lg border border-dashed border-slate-300 p-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".db"
+                className="text-sm text-slate-500 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:text-slate-700 hover:file:bg-slate-200"
+                onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)}
+              />
+              <label className="flex items-center gap-1.5 text-sm text-slate-600">
+                <input type="checkbox" checked={restoreUsers} onChange={(e) => setRestoreUsers(e.target.checked)} />
+                同时恢复用户账号（恢复后所有会话失效，需重新登录）
+              </label>
+              <Button
+                size="sm" variant="destructive"
+                disabled={!restoreFile || restoring}
+                onClick={() => setRestoreConfirmOpen(true)}
+              >
+                <Upload className="mr-1 h-4 w-4" /> {restoring ? '恢复中…' : '恢复备份'}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">恢复将整体替换当前业务数据，操作不可撤销，建议先下载当前备份。</p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* 新建/编辑用户对话框 */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
@@ -438,6 +534,26 @@ export default function Settings() {
               }}
             >
               确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 恢复备份确认 */}
+      <AlertDialog open={restoreConfirmOpen} onOpenChange={setRestoreConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认恢复备份？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将用「{restoreFile?.name}」（{restoreFile ? fmtSize(restoreFile.size) : ''}）整体替换当前业务数据
+              {restoreUsers ? '，包括用户账号（恢复后所有会话失效，需重新登录）' : '（不含用户账号）'}。
+              此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={doRestore} disabled={restoring}>
+              {restoring ? '恢复中…' : '确认恢复'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

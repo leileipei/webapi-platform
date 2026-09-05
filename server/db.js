@@ -1,6 +1,6 @@
 // SQLite 持久化层：表结构、种子数据、通用读写
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, createReadStream, writeFileSync, unlinkSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { seedApis, seedGroups, seedApps, seedRules, seedAlerts, seedMetricsRows } from './seed.js'
@@ -263,6 +263,72 @@ export function seedAll() {
   for (const r of seedAlerts()) store.upsert('alerts', r)
   const ins = db.prepare('INSERT OR REPLACE INTO metrics (api_id, date, calls, errors, latency_sum) VALUES (?, ?, ?, ?, ?)')
   for (const m of seedMetricsRows(apis)) ins.run(m.apiId, m.date, m.calls, m.errors, m.latencySum)
+}
+
+/** 业务数据表清单（恢复时按此顺序整体替换） */
+const BUSINESS_TABLES = ['apis', 'groups_', 'apps', 'rules', 'alerts', 'metrics', 'logs', 'audit_logs']
+
+/** 生成一致性备份文件（VACUUM INTO），返回临时文件路径，调用方流式发送后需自行删除 */
+export function createBackup() {
+  const tmpPath = join(__dirname, `backup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.db`)
+  // VACUUM INTO 不支持绑定参数，路径为本函数内部生成，转义后内联
+  db.exec(`VACUUM INTO '${tmpPath.replaceAll("'", "''")}'`)
+  return tmpPath
+}
+
+/**
+ * 从上传的 SQLite 文件恢复数据：校验文件头后 ATTACH 导入，事务内整体替换业务表；
+ * includeUsers 为 true 时连同用户账号一并恢复（调用方需随后注销全部会话）。
+ * 恢复完成后会追加一条审计记录（此时审计表已被替换为备份内容）。
+ */
+export function restoreFrom(fileBuf, { includeUsers = false } = {}) {
+  const MAGIC = 'SQLite format 3'
+  if (fileBuf.length < 100 || fileBuf.subarray(0, MAGIC.length).toString('latin1') !== MAGIC) {
+    return { ok: false, message: '文件不是有效的 SQLite 数据库' }
+  }
+  const tmpPath = join(__dirname, `restore-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.db`)
+  writeFileSync(tmpPath, fileBuf)
+  try {
+    db.prepare(`ATTACH DATABASE ? AS bak`).run(tmpPath)
+    try {
+      // 校验备份文件包含核心表
+      const bakTables = db.prepare(`SELECT name FROM bak.sqlite_master WHERE type='table'`).all().map((r) => r.name)
+      const missing = BUSINESS_TABLES.filter((t) => !bakTables.includes(t))
+      if (missing.length > 0) return { ok: false, message: `备份文件缺少数据表：${missing.join('、')}` }
+
+      const tables = includeUsers ? [...BUSINESS_TABLES, 'users'] : BUSINESS_TABLES
+      db.exec('BEGIN')
+      try {
+        for (const t of tables) {
+          db.exec(`DELETE FROM main.${t}`)
+          db.exec(`INSERT INTO main.${t} SELECT * FROM bak.${t}`)
+        }
+        db.exec('COMMIT')
+      } catch (err) {
+        db.exec('ROLLBACK')
+        throw err
+      }
+      return { ok: true, tables: tables.length }
+    } finally {
+      db.exec('DETACH DATABASE bak')
+    }
+  } catch (err) {
+    return { ok: false, message: '恢复失败：' + (err?.message ?? 'unknown') }
+  } finally {
+    try { unlinkSync(tmpPath) } catch { /* ignore */ }
+  }
+}
+
+export function backupStream(filePath) {
+  return createReadStream(filePath)
+}
+
+export function fileSize(filePath) {
+  return statSync(filePath).size
+}
+
+export function removeFile(filePath) {
+  try { unlinkSync(filePath) } catch { /* ignore */ }
 }
 
 // 首次启动自动灌入示例数据
