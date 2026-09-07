@@ -2,7 +2,7 @@ import { NavLink, Navigate, Outlet, useNavigate } from 'react-router'
 import { useState } from 'react'
 import {
   LayoutDashboard, Globe, FolderTree, KeyRound, Activity, ShieldCheck,
-  CircleUserRound, LogOut, LockKeyhole, ScrollText, Settings as SettingsIcon,
+  CircleUserRound, LogOut, LockKeyhole, ScrollText, Settings as SettingsIcon, ChevronDown,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/lib/store'
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
 const NAV: { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean; adminOnly?: boolean }[] = [
   { to: '/', label: '概览', icon: LayoutDashboard, end: true },
@@ -155,20 +156,14 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="space-y-2 px-3 pb-5">
+        <div className="px-3 pb-5">
           {/* 当前用户 */}
-          <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2">
+          <div className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2">
             <CircleUserRound className="h-4 w-4 shrink-0 text-slate-400" />
             <span className="flex-1 truncate text-xs text-slate-300">
               {authStorage.getUser() ?? 'admin'}
               <span className="ml-1.5 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300">{ROLE_LABEL[role]}</span>
             </span>
-            <button title="修改密码" onClick={() => setPwdOpen(true)} className="text-slate-400 hover:text-white">
-              <LockKeyhole className="h-3.5 w-3.5" />
-            </button>
-            <button title="退出登录" onClick={doLogout} className="text-slate-400 hover:text-red-400">
-              <LogOut className="h-3.5 w-3.5" />
-            </button>
           </div>
         </div>
       </aside>
@@ -176,8 +171,32 @@ export default function Layout() {
       <ChangePasswordDialog open={pwdOpen} onOpenChange={setPwdOpen} />
 
       {/* Main */}
-      <main className="flex-1 overflow-y-auto">
-        <Outlet />
+      <main className="flex flex-1 flex-col overflow-hidden">
+        {/* 顶栏：右侧用户菜单 */}
+        <header className="flex h-14 shrink-0 items-center justify-end border-b border-slate-200 bg-white px-6">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-100">
+                <CircleUserRound className="h-5 w-5 text-slate-400" />
+                <span className="font-medium">{authStorage.getUser() ?? 'admin'}</span>
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{ROLE_LABEL[role]}</span>
+                <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => setPwdOpen(true)}>
+                <LockKeyhole className="mr-2 h-3.5 w-3.5" /> 修改密码
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="text-red-600" onClick={doLogout}>
+                <LogOut className="mr-2 h-3.5 w-3.5" /> 退出登录
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </header>
+        <div className="flex-1 overflow-y-auto">
+          <Outlet />
+        </div>
       </main>
     </div>
   )
