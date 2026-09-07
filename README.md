@@ -73,6 +73,25 @@ npm run server     # 启动一体化服务（默认绑定 0.0.0.0:3100）
 1. 在服务器安装 Node.js 24+，运行 `npm run server`（后端监听 3100 并可直接对外提供全部功能，此时可不使用 IIS）；
 2. 若必须经 IIS（如占用 80 端口）：安装 **URL Rewrite** 与 **Application Request Routing (ARR)** 扩展，在 ARR 中勾选 *Enable proxy*，并确保 `dist/` 中的 `web.config`（已随构建自动输出）保留在站点根目录——它会将 `/admin/*` 与 `/gw/*` 反向代理到本机 Node 后端。
 
+## 测试与质量保障
+
+仓库配置了 GitHub Actions CI（`.github/workflows/ci.yml`），每次推送自动执行三个作业：
+
+| 作业 | 内容 |
+|---|---|
+| 前端构建 | `tsc` 类型检查 + `vite build` |
+| 后端冒烟 | 启动 + 健康检查 + 登录鉴权 + `scripts/e2e.mjs` 全链路回归 |
+| 前端 UI 冒烟 | Playwright（无头 Chromium）：登录页渲染 → 错误密码提示 → 登录后控制台渲染 |
+
+本地回归（需先启动一个**测试实例**，e2e 会在其中创建 `smoke-*` 测试数据，请勿对生产实例运行）：
+
+```bash
+npm run test:e2e   # 后端链路 16 项断言：注册→连通性测试→发布→授权→网关调用→安全管控(401/403/405/停用)→日志与审计落库
+npm run test:ui    # Playwright UI 冒烟（首次运行需 npx playwright install chromium）
+```
+
+两个命令均支持指向其他实例：`BASE=http://<host>:<port> npm run test:e2e`、`BASE_URL=http://<host>:<port> npm run test:ui`。
+
 ## 目录结构
 
 ```
@@ -91,6 +110,12 @@ server/
 ├── archive.js         # 调用日志自动归档（gzip NDJSON 导出 + 定期清理）
 ├── db.js              # SQLite 表结构、读写、指标聚合
 └── seed.js            # 内置示例数据（11 个 API / 4 分组 / 3 应用 / 告警规则 / 30 天历史指标）
+
+scripts/
+└── e2e.mjs            # 后端链路冒烟（16 项断言，CI 自动执行）
+
+e2e-ui/                # Playwright 前端 UI 冒烟用例
+playwright.config.js   # Playwright 配置（BASE_URL 指向目标实例）
 ```
 
 ## 说明
