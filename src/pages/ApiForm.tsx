@@ -103,12 +103,47 @@ export default function ApiForm() {
   const [publishNow, setPublishNow] = useState(true)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
+  // 测试范围：basic=基本信息（经网关测平台侧 API）；backend=后端服务地址直连
+  const [testScope, setTestScope] = useState<'basic' | 'backend'>('backend')
+
+  /** 基本信息测试：经平台网关调用该 API（/gw + 路径 + 方法），验证平台侧链路是否正常 */
+  const testGatewayApi = async () => {
+    if (!form.path || !form.path.startsWith('/')) {
+      toast.error('请先填写合法的请求路径')
+      return
+    }
+    // 路径占位符用测试值 1 替换
+    const gwPath = form.path.replace(/\{(\w+)\}/g, '1')
+    setTestScope('basic')
+    setTesting(true)
+    setTestResult(null)
+    const t0 = performance.now()
+    try {
+      const resp = await fetch(`/gw${gwPath}`, {
+        method: form.method,
+        headers: form.method === 'GET' ? {} : { 'Content-Type': 'application/json' },
+        body: form.method === 'GET' ? undefined : '{}',
+      })
+      const latency = Math.round(performance.now() - t0)
+      const text = await resp.text()
+      setTestResult({ reachable: resp.ok, status: resp.status, latency, bodyPreview: text.slice(0, 300) })
+      if (resp.ok) toast.success(`网关调用成功：HTTP ${resp.status} · ${latency}ms`)
+      else toast.warning(`网关返回 HTTP ${resp.status}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '请求失败'
+      setTestResult({ reachable: false, latency: Math.round(performance.now() - t0), error: msg })
+      toast.error(msg)
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const testConnectivity = async () => {
     if (!/^https?:\/\/.+/.test(form.backendUrl.trim())) {
       toast.error('请先在下方「后端服务与稳定性」中填写合法的 http(s):// 后端服务地址')
       return
     }
+    setTestScope('backend')
     setTesting(true)
     setTestResult(null)
     try {
@@ -261,20 +296,27 @@ export default function ApiForm() {
                 className="font-mono" placeholder="/api/v1/resource/{id}"
               />
             </div>
-            <Button type="button" variant="outline" onClick={testConnectivity} disabled={testing} className="shrink-0">
-              {testing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
+            <Button type="button" variant="outline" onClick={testGatewayApi} disabled={testing} className="shrink-0">
+              {testing && testScope === 'basic' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
               API 测试
             </Button>
           </div>
-          {testResult && (
-            <div className={`rounded-lg p-3 text-xs ${testResult.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+          {testResult && testScope === 'basic' && (
+            <div className={`rounded-lg p-3 text-xs ${testResult.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
               <div className="flex items-center gap-1.5 font-medium">
                 {testResult.reachable ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
                 {testResult.reachable
-                  ? `连通正常 · HTTP ${testResult.status} · 延迟 ${testResult.latency}ms`
-                  : `无法连通 · ${testResult.error}`}
+                  ? `平台 API 调用正常 · HTTP ${testResult.status} · 延迟 ${testResult.latency}ms`
+                  : testResult.error
+                    ? `网关不可达 · ${testResult.error}`
+                    : `平台 API 返回 HTTP ${testResult.status}${
+                        testResult.status === 404 ? '（该 API 尚未注册或未发布到网关，保存并发布后再测）'
+                        : testResult.status === 401 ? '（需要鉴权：请使用已授权应用的 AccessKey 调用）'
+                        : testResult.status === 403 ? '（未发布状态或无授权，发布后重试）'
+                        : testResult.status === 429 ? '（触发限流，请稍后重试）'
+                        : ''}`}
               </div>
-              {testResult.reachable && testResult.bodyPreview && (
+              {testResult.bodyPreview && (
                 <pre className="mt-2 max-h-24 overflow-auto rounded bg-white/60 p-2 font-mono text-[11px] text-slate-600">{testResult.bodyPreview}</pre>
               )}
             </div>
@@ -318,11 +360,11 @@ export default function ApiForm() {
                 placeholder="http://10.0.0.11:8080/service/path"
               />
               <Button type="button" variant="outline" onClick={testConnectivity} disabled={testing} className="shrink-0">
-                {testing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
+                {testing && testScope === 'backend' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
                 测试连接
               </Button>
             </div>
-            {testResult && (
+            {testResult && testScope === 'backend' && (
               <div className={`mt-2 rounded-lg p-3 text-xs ${testResult.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
                 <div className="flex items-center gap-1.5 font-medium">
                   {testResult.reachable ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
