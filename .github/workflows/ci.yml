@@ -40,7 +40,7 @@ jobs:
       - name: 启动后端并验证
         run: |
           node server/index.js &
-          SERVER_PID=$!
+          echo $! > server.pid
           for i in $(seq 1 20); do
             curl -sf http://localhost:3100/healthz && break
             sleep 0.5
@@ -56,5 +56,11 @@ jobs:
           # 带令牌访问应返回 200
           code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" http://localhost:3100/admin/state)
           [ "$code" = "200" ] || { echo "期望 200，实际 $code"; exit 1; }
-          kill $SERVER_PID
           echo "后端冒烟测试通过"
+
+      - name: 端到端回归（注册→发布→授权→网关调用→安全管控）
+        run: node scripts/e2e.mjs
+
+      - name: 关闭后端
+        if: always()
+        run: kill $(cat server.pid) 2>/dev/null || true
