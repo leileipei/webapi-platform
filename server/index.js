@@ -660,15 +660,6 @@ async function handleAdmin(req, res, url) {
       return json(res, 200, { ok: true })
     }
 
-    // 清除所有「已处理」告警记录（仅 admin）
-    if (resource === 'alerts' && id === 'clear-acked' && req.method === 'POST') {
-      if (!needRole('admin')) return
-      const acked = store.list('alerts').filter((a) => a.acked)
-      for (const a of acked) store.remove('alerts', a.id)
-      audit('清除已处理告警', null, `共清除 ${acked.length} 条`)
-      return json(res, 200, { ok: true, cleared: acked.length })
-    }
-
     if (resource === 'alerts' && id && sub === 'ack' && req.method === 'POST') {
       if (!needRole('operator')) return
       const alert = store.get('alerts', id)

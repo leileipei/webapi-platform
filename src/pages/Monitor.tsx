@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
-import { Plus, Pencil, Trash2, CheckCheck, BellRing, RotateCcw } from 'lucide-react'
+import { Plus, Pencil, Trash2, CheckCheck, BellRing } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, LineChart, Line, Legend,
@@ -13,10 +13,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription as AlertDesc, AlertDialogFooter as AlertFooter, AlertDialogHeader as AlertHeader, AlertDialogTitle as AlertTitle,
-} from '@/components/ui/alert-dialog'
 import { useStore, newId } from '@/lib/store'
 import { useMetrics, useMinuteMetrics, toLocal } from '@/lib/api'
 import type { AlertRule, AlertMetric, AlertLevel } from '@/types'
@@ -39,7 +35,6 @@ export default function Monitor() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [realtimeKey, setRealtimeKey] = useState(0)
   const [showAllAlerts, setShowAllAlerts] = useState(false) // false=仅未处理，true=全部告警
-  const [clearOpen, setClearOpen] = useState(false)
 
   const merged = useMetrics(undefined, 30)
   const minuteData = useMinuteMetrics(60, undefined, realtimeKey)
@@ -61,7 +56,6 @@ export default function Monitor() {
   }))
 
   const unacked = state.alertRecords.filter((r) => !r.acked)
-  const ackedCount = state.alertRecords.length - unacked.length
   const visibleRecords = showAllAlerts ? state.alertRecords : unacked
 
   const openNew = () => {
@@ -252,15 +246,6 @@ export default function Monitor() {
                 全部告警（{state.alertRecords.length}）
               </button>
             </div>
-            <Button
-              variant="outline" size="sm"
-              className="text-red-600"
-              disabled={ackedCount === 0}
-              title={ackedCount === 0 ? '没有已处理的告警可清除' : `清除 ${ackedCount} 条已处理告警`}
-              onClick={() => setClearOpen(true)}
-            >
-              <RotateCcw className="mr-1 h-3.5 w-3.5" /> 重置
-            </Button>
           </div>
         </CardHeader>
         <Table>
@@ -352,30 +337,6 @@ export default function Monitor() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* 重置：清除已处理告警（二次确认） */}
-      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
-        <AlertDialogContent>
-          <AlertHeader>
-            <AlertTitle>清除已处理的告警记录？</AlertTitle>
-            <AlertDesc>
-              将永久清除 {ackedCount} 条状态为「已处理」的告警记录，未处理的告警不受影响。此操作不可撤销。
-            </AlertDesc>
-          </AlertHeader>
-          <AlertFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-red-600 hover:bg-red-700"
-              onClick={() => {
-                dispatch({ type: 'clearAckedAlerts' })
-                toast.success(`已清除 ${ackedCount} 条已处理告警`)
-              }}
-            >
-              确认清除
-            </AlertDialogAction>
-          </AlertFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   )
 }
