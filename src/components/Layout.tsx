@@ -1,7 +1,7 @@
 import { NavLink, Navigate, Outlet, useNavigate } from 'react-router'
 import { useState } from 'react'
 import {
-  LayoutDashboard, Globe, FolderTree, KeyRound, Activity, Plus, ShieldCheck,
+  LayoutDashboard, Globe, FolderTree, KeyRound, Activity, ShieldCheck,
   CircleUserRound, LogOut, LockKeyhole, ScrollText, Settings as SettingsIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -82,7 +82,6 @@ export default function Layout() {
   const [pwdOpen, setPwdOpen] = useState(false)
   const unacked = state.alertRecords.filter((r) => !r.acked).length
   const role = authStorage.getRole()
-  const isViewer = role === 'viewer'
 
   if (!authStorage.getToken()) return <Navigate to="/login" replace />
 
@@ -157,15 +156,6 @@ export default function Layout() {
           ))}
         </nav>
         <div className="space-y-2 px-3 pb-5">
-          {!isViewer && (
-            <NavLink
-              to="/apis/new"
-              className="flex items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2.5 text-sm font-medium text-white hover:bg-blue-600"
-            >
-              <Plus className="h-4 w-4" /> 注册新 API
-            </NavLink>
-          )}
-
           {/* 当前用户 */}
           <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2">
             <CircleUserRound className="h-4 w-4 shrink-0 text-slate-400" />
