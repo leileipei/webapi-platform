@@ -27,6 +27,7 @@ export default function Apps() {
   const [editing, setEditing] = useState<AppCredential | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toDelete, setToDelete] = useState<AppCredential | null>(null)
+  const [toReset, setToReset] = useState<AppCredential | null>(null)
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({})
 
   const copy = (text: string, label: string) => {
@@ -49,6 +50,14 @@ export default function Apps() {
     dispatch({ type: 'upsertApp', app: editing })
     toast.success('应用已保存')
     setDialogOpen(false)
+  }
+
+  const requestRegenerate = (app: AppCredential) => {
+    if (app.status === 'active') {
+      toast.error('请先停用应用，再重置 SecretKey', { description: '启用中的应用不允许重置密钥，避免在线调用方瞬间失效' })
+      return
+    }
+    setToReset(app)
   }
 
   const regenerate = (app: AppCredential) => {
@@ -120,7 +129,12 @@ export default function Apps() {
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copy(app.secretKey, 'SecretKey ')}>
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600" title="重置密钥" onClick={() => regenerate(app)}>
+                  <Button
+                    variant="ghost" size="icon"
+                    className={app.status === 'active' ? 'h-7 w-7 text-slate-300' : 'h-7 w-7 text-amber-600'}
+                    title={app.status === 'active' ? '请先停用应用，再重置 SecretKey' : '重置密钥'}
+                    onClick={() => requestRegenerate(app)}
+                  >
                     <RefreshCw className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -208,6 +222,28 @@ export default function Apps() {
               }}
             >
               确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={!!toReset} onOpenChange={(open) => !open && setToReset(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>重置「{toReset?.name}」的 SecretKey？</AlertDialogTitle>
+            <AlertDialogDescription>
+              重置后旧 SecretKey 立即失效，使用该密钥的调用方将无法通过网关校验。请确认已通知相关团队并做好密钥轮换准备。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                if (toReset) regenerate(toReset)
+                setToReset(null)
+              }}
+            >
+              确认重置
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
