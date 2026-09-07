@@ -73,6 +73,12 @@ export default function ApiList() {
     setPending(null)
   }
 
+  // 已授权给启用中应用的 API 禁止下线/废弃：先解除授权或停用应用
+  const blockingApps =
+    pending && pending.action !== 'delete'
+      ? state.apps.filter((app) => app.apiIds.includes(pending.api.id) && app.status === 'active')
+      : []
+
   return (
     <div className="space-y-5 p-8">
       <div className="flex items-end justify-between">
@@ -206,35 +212,48 @@ export default function ApiList() {
 
       <AlertDialog open={!!pending} onOpenChange={(open) => !open && setPending(null)}>
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{pending ? confirmMeta[pending.action].title : ''}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {pending ? confirmMeta[pending.action].desc : ''}
-              {pending?.action === 'delete' && (
-                <span className="mt-1 block font-mono text-xs">{pending.api.path}</span>
-              )}
-              {pending && pending.action !== 'delete' && (() => {
-                // 提醒：该 API 已授权给启用中的应用，下线/废弃会立即中断这些应用的调用
-                const affected = state.apps.filter((app) => app.apiIds.includes(pending.api.id) && app.status === 'active')
-                if (affected.length === 0) return null
-                return (
-                  <span className="mt-2 block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
-                    ⚠ 该 API 已授权给 {affected.length} 个启用中的应用（{affected.map((x) => x.name).join('、')}），
-                    操作后这些应用的调用将立即被网关拒绝。如仍需继续，请确认已通知相关调用方。
+          {blockingApps.length > 0 && pending ? (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  无法{pending.action === 'offline' ? '下线' : '废弃'} API「{pending.api.name}」
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  <span className="mt-1 block rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">
+                    ⛔ 该 API 已授权给 {blockingApps.length} 个启用中的应用（{blockingApps.map((x) => x.name).join('、')}），
+                    为防止在线调用方业务中断，系统禁止{pending.action === 'offline' ? '下线' : '废弃'}该 API。
                   </span>
-                )
-              })()}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              className={pending ? confirmMeta[pending.action].cls : ''}
-              onClick={doConfirm}
-            >
-              {pending ? confirmMeta[pending.action].btn : '确认'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
+                  <span className="mt-2 block">
+                    请先在「应用与密钥」中停用相关应用或移除该 API 的授权，再执行此操作。
+                  </span>
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>知道了</AlertDialogCancel>
+              </AlertDialogFooter>
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{pending ? confirmMeta[pending.action].title : ''}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {pending ? confirmMeta[pending.action].desc : ''}
+                  {pending?.action === 'delete' && (
+                    <span className="mt-1 block font-mono text-xs">{pending.api.path}</span>
+                  )}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction
+                  className={pending ? confirmMeta[pending.action].cls : ''}
+                  onClick={doConfirm}
+                >
+                  {pending ? confirmMeta[pending.action].btn : '确认'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
         </AlertDialogContent>
       </AlertDialog>
 

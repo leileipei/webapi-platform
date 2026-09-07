@@ -617,6 +617,15 @@ async function handleAdmin(req, res, url) {
       const api = store.get('apis', id)
       if (!api) return json(res, 404, { message: 'API 不存在' })
       if (!['draft', 'published', 'offline', 'deprecated'].includes(status)) return json(res, 400, { message: '非法状态' })
+      // 安全约束：已授权给启用中应用的 API 禁止下线/废弃，防止在线调用方业务中断
+      if (status === 'offline' || status === 'deprecated') {
+        const blockers = store.list('apps').filter((a) => a.status === 'active' && a.apiIds.includes(id))
+        if (blockers.length > 0) {
+          return json(res, 409, {
+            message: `无法${status === 'offline' ? '下线' : '废弃'}：该 API 已授权给 ${blockers.length} 个启用中的应用（${blockers.map((a) => a.name).join('、')}），请先停用相关应用或移除授权`,
+          })
+        }
+      }
       api.status = status
       api.updatedAt = new Date().toISOString().slice(0, 10)
       store.upsert('apis', api)
