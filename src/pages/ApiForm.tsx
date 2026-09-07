@@ -106,7 +106,7 @@ export default function ApiForm() {
 
   const testConnectivity = async () => {
     if (!/^https?:\/\/.+/.test(form.backendUrl.trim())) {
-      toast.error('请先填写合法的 http(s):// 后端服务地址')
+      toast.error('请先在下方「后端服务与稳定性」中填写合法的 http(s):// 后端服务地址')
       return
     }
     setTesting(true)
@@ -231,7 +231,7 @@ export default function ApiForm() {
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-[120px_1fr] gap-4">
+          <div className="grid grid-cols-[120px_1fr_auto] items-end gap-4">
             <div className="space-y-1.5">
               <Label>请求方法 *</Label>
               <Select value={form.method} onValueChange={(v) => set('method', v as HttpMethod)}>
@@ -245,7 +245,24 @@ export default function ApiForm() {
               <Label>请求路径 *</Label>
               <Input value={form.path} onChange={(e) => set('path', e.target.value)} className="font-mono" placeholder="/api/v1/resource/{id}" />
             </div>
+            <Button type="button" variant="outline" onClick={testConnectivity} disabled={testing} className="shrink-0">
+              {testing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
+              API 测试
+            </Button>
           </div>
+          {testResult && (
+            <div className={`rounded-lg p-3 text-xs ${testResult.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+              <div className="flex items-center gap-1.5 font-medium">
+                {testResult.reachable ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+                {testResult.reachable
+                  ? `连通正常 · HTTP ${testResult.status} · 延迟 ${testResult.latency}ms`
+                  : `无法连通 · ${testResult.error}`}
+              </div>
+              {testResult.reachable && testResult.bodyPreview && (
+                <pre className="mt-2 max-h-24 overflow-auto rounded bg-white/60 p-2 font-mono text-[11px] text-slate-600">{testResult.bodyPreview}</pre>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-1.5">
               <Label>协议</Label>
