@@ -248,7 +248,7 @@ export default function ApiForm() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">基本信息</CardTitle>
-          <CardDescription>API 的身份信息，路径 + 方法在平台内必须唯一</CardDescription>
+          <CardDescription>定义平台对外暴露的 API：调用方访问 <span className="font-mono">/gw + 请求路径</span>，路径 + 方法在平台内必须唯一</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -295,6 +295,9 @@ export default function ApiForm() {
                 }}
                 className="font-mono" placeholder="/api/v1/resource/{id}"
               />
+              <p className="text-xs text-slate-400">
+                发布后对外地址为 <span className="font-mono">/gw{form.path && form.path.startsWith('/') ? form.path : '/<此路径>'}</span>，也可直接粘贴完整 URL 自动拆分
+              </p>
             </div>
             <Button type="button" variant="outline" onClick={testGatewayApi} disabled={testing} className="shrink-0">
               {testing && testScope === 'basic' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
@@ -347,7 +350,7 @@ export default function ApiForm() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">后端服务与稳定性</CardTitle>
-          <CardDescription>网关转发目标与容错策略，直接影响线上稳定性</CardDescription>
+          <CardDescription>外部真实接口地址：平台收到调用后，将请求转发到这里并带回响应；容错策略直接影响线上稳定性</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
