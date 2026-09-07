@@ -23,6 +23,7 @@ type Action =
   | { type: 'upsertRule'; rule: AlertRule }
   | { type: 'deleteRule'; id: string }
   | { type: 'ackAlert'; id: string }
+  | { type: 'clearAckedAlerts' }
   | { type: 'reset' }
 
 function reducer(state: State, action: Action): State {
@@ -69,6 +70,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, alertRules: state.alertRules.filter((r) => r.id !== action.id) }
     case 'ackAlert':
       return { ...state, alertRecords: state.alertRecords.map((r) => (r.id === action.id ? { ...r, acked: 1 } : r)) }
+    case 'clearAckedAlerts':
+      return { ...state, alertRecords: state.alertRecords.filter((r) => !r.acked) }
     default:
       return state
   }
@@ -108,6 +111,9 @@ async function syncToBackend(action: Action): Promise<void> {
       break
     case 'ackAlert':
       await apiClient.post(`/admin/alerts/${action.id}/ack`, {})
+      break
+    case 'clearAckedAlerts':
+      await apiClient.post('/admin/alerts/clear-acked', {})
       break
     case 'reset':
       await apiClient.post('/admin/reset', {})
