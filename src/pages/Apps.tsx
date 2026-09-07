@@ -147,7 +147,15 @@ export default function Apps() {
                 {app.apiIds.length === 0 && <span className="text-xs text-slate-400">暂无授权</span>}
                 {app.apiIds.slice(0, 8).map((id) => {
                   const a = state.apis.find((x) => x.id === id)
-                  return a ? <Badge key={id} variant="outline" className="text-xs font-normal">{a.name}</Badge> : null
+                  if (!a) return null
+                  // 同步展示 API 当前状态：非已发布的授权接口会标注，调用实际已被网关拒绝
+                  const statusTag = { draft: '草稿', offline: '已下线', deprecated: '已废弃' }[a.status as 'draft' | 'offline' | 'deprecated']
+                  return (
+                    <Badge key={id} variant="outline" className={`text-xs font-normal ${statusTag ? 'border-amber-300 bg-amber-50 text-amber-700' : ''}`}>
+                      {a.name}
+                      {statusTag && <span className="ml-1 text-[10px]">· {statusTag}</span>}
+                    </Badge>
+                  )
                 })}
                 {app.apiIds.length > 8 && <span className="text-xs text-slate-400">等 {app.apiIds.length} 个</span>}
               </div>

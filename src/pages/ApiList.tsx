@@ -213,6 +213,17 @@ export default function ApiList() {
               {pending?.action === 'delete' && (
                 <span className="mt-1 block font-mono text-xs">{pending.api.path}</span>
               )}
+              {pending && pending.action !== 'delete' && (() => {
+                // 提醒：该 API 已授权给启用中的应用，下线/废弃会立即中断这些应用的调用
+                const affected = state.apps.filter((app) => app.apiIds.includes(pending.api.id) && app.status === 'active')
+                if (affected.length === 0) return null
+                return (
+                  <span className="mt-2 block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+                    ⚠ 该 API 已授权给 {affected.length} 个启用中的应用（{affected.map((x) => x.name).join('、')}），
+                    操作后这些应用的调用将立即被网关拒绝。如仍需继续，请确认已通知相关调用方。
+                  </span>
+                )
+              })()}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
