@@ -150,7 +150,7 @@ export default function ApiForm() {
 
   const validate = (): string | null => {
     if (!form.name.trim()) return '请填写 API 名称'
-    if (!/^\/[\w\-/{}/]*$/.test(form.path) || form.path.length < 2) return '路径格式不正确，需以 / 开头，可包含 {param} 占位符'
+    if (!/^\/[\w\-/{}/.~]*$/.test(form.path) || form.path.length < 2) return '路径格式不正确，需以 / 开头，可包含字母、数字、- _ . ~ 与 {param} 占位符'
     if (!form.groupId) return '请选择分组'
     if (!form.backendUrl.trim() || !/^https?:\/\/.+/.test(form.backendUrl)) return '后端服务地址需为 http(s):// 开头的合法 URL'
     if (form.timeout < 100 || form.timeout > 60000) return '超时时间需在 100 ~ 60000 ms 之间'
