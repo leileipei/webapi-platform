@@ -277,7 +277,12 @@ export default function ApiForm() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>请求路径 *</Label>
+              <Label className="flex items-baseline gap-2">
+                请求路径 *
+                <span className="truncate text-[11px] font-normal text-slate-400">
+                  对外地址 <span className="font-mono">/gw{form.path && form.path.startsWith('/') ? form.path : ''}</span> · 粘贴完整 URL 自动拆分
+                </span>
+              </Label>
               <Input
                 value={form.path}
                 onChange={(e) => {
@@ -295,9 +300,6 @@ export default function ApiForm() {
                 }}
                 className="font-mono" placeholder="/api/v1/resource/{id}"
               />
-              <p className="text-xs text-slate-400">
-                发布后对外地址为 <span className="font-mono">/gw{form.path && form.path.startsWith('/') ? form.path : '/<此路径>'}</span>，也可直接粘贴完整 URL 自动拆分
-              </p>
             </div>
             <Button type="button" variant="outline" onClick={testGatewayApi} disabled={testing} className="shrink-0">
               {testing && testScope === 'basic' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
