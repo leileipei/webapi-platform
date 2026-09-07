@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { Plus, Search, MoreHorizontal, Pencil, Trash2, ArrowUpCircle, ArrowDownCircle, Ban } from 'lucide-react'
+import { Plus, Search, MoreHorizontal, Pencil, Trash2, ArrowUpCircle, ArrowDownCircle, Ban, PlugZap } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,6 +13,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useStore } from '@/lib/store'
+import { useConnectivityTest } from '@/components/ConnectivityTest'
 import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, AUTH_LABELS } from '@/components/badges'
 import type { ApiItem } from '@/types'
@@ -25,6 +26,7 @@ export default function ApiList() {
   const [method, setMethod] = useState('all')
   const [groupId, setGroupId] = useState('all')
   const [toDelete, setToDelete] = useState<ApiItem | null>(null)
+  const connTest = useConnectivityTest()
 
   const groupName = (id: string) => state.groups.find((g) => g.id === id)?.name ?? '未分组'
 
@@ -138,6 +140,9 @@ export default function ApiList() {
                         <DropdownMenuItem onClick={() => navigate(`/apis/${a.id}/edit`)}>
                           <Pencil className="mr-2 h-3.5 w-3.5" /> 编辑
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => connTest.run(a.backendUrl, a.method, a.timeout)}>
+                          <PlugZap className="mr-2 h-3.5 w-3.5 text-blue-600" /> 测试后端连通
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         {a.status !== 'published' && (
                           <DropdownMenuItem onClick={() => changeStatus(a, 'published')}>
@@ -197,6 +202,7 @@ export default function ApiList() {
       <p className="text-xs text-slate-400">
         找不到想要的 API？<Link to="/apis/new" className="text-blue-600 hover:underline">立即注册</Link>
       </p>
+      {connTest.dialog}
     </div>
   )
 }

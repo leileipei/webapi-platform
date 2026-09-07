@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import {
-  ArrowLeft, Pencil, ArrowUpCircle, ArrowDownCircle, Ban, Trash2, Play, Loader2, Copy, Check, ScrollText,
+  ArrowLeft, Pencil, ArrowUpCircle, ArrowDownCircle, Ban, Trash2, Play, Loader2, Copy, Check, ScrollText, PlugZap,
 } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, LineChart, Line,
@@ -20,6 +20,7 @@ import { useStore } from '@/lib/store'
 import { useMetrics } from '@/lib/api'
 import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, AUTH_LABELS } from '@/components/badges'
+import { useConnectivityTest } from '@/components/ConnectivityTest'
 import type { ApiItem } from '@/types'
 
 function ParamTable({ title, params }: { title: string; params: ApiItem['queryParams'] }) {
@@ -67,6 +68,7 @@ export default function ApiDetail() {
   const [copied, setCopied] = useState(false)
   const [metricsVersion, setMetricsVersion] = useState(0)
   const metrics = useMetrics(api?.id, 30, metricsVersion)
+  const connTest = useConnectivityTest()
 
   if (!api) {
     return (
@@ -156,6 +158,9 @@ export default function ApiDetail() {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => connTest.run(api.backendUrl, api.method, api.timeout)}>
+            <PlugZap className="mr-1 h-4 w-4" /> 测试连通
+          </Button>
           <Button variant="outline" onClick={() => navigate(`/logs?apiId=${api.id}`)}>
             <ScrollText className="mr-1 h-4 w-4" /> 调用日志
           </Button>
@@ -431,6 +436,7 @@ export default function ApiDetail() {
           </Card>
         </TabsContent>
       </Tabs>
+      {connTest.dialog}
     </div>
   )
 }
