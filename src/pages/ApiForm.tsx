@@ -243,7 +243,23 @@ export default function ApiForm() {
             </div>
             <div className="space-y-1.5">
               <Label>请求路径 *</Label>
-              <Input value={form.path} onChange={(e) => set('path', e.target.value)} className="font-mono" placeholder="/api/v1/resource/{id}" />
+              <Input
+                value={form.path}
+                onChange={(e) => {
+                  const v = e.target.value
+                  // 粘贴完整 URL 时自动拆分：路径部分填入本字段，完整 URL 填入后端服务地址
+                  if (/^https?:\/\//.test(v)) {
+                    try {
+                      const u = new URL(v)
+                      setForm((f) => ({ ...f, path: u.pathname || '/', backendUrl: f.backendUrl || v }))
+                      toast.success('已自动拆分：路径与后端服务地址已分别填好')
+                      return
+                    } catch { /* 不是合法 URL，走普通校验 */ }
+                  }
+                  set('path', v)
+                }}
+                className="font-mono" placeholder="/api/v1/resource/{id}"
+              />
             </div>
             <Button type="button" variant="outline" onClick={testConnectivity} disabled={testing} className="shrink-0">
               {testing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1 h-4 w-4" />}
