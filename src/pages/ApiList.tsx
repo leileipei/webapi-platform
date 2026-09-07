@@ -171,9 +171,15 @@ export default function ApiList() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => navigate(`/apis/${a.id}`)}>查看详情</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => navigate(`/apis/${a.id}/edit`)}>
-                          <Pencil className="mr-2 h-3.5 w-3.5" /> 编辑
-                        </DropdownMenuItem>
+                        {a.status === 'published' ? (
+                          <DropdownMenuItem disabled className="text-slate-300" title="已发布状态不允许编辑，请先下线">
+                            <Pencil className="mr-2 h-3.5 w-3.5" /> 编辑（需先下线）
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem onClick={() => navigate(`/apis/${a.id}/edit`)}>
+                            <Pencil className="mr-2 h-3.5 w-3.5" /> 编辑
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         {a.status !== 'published' && (
                           <DropdownMenuItem onClick={() => changeStatus(a, 'published')}>

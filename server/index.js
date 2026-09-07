@@ -640,7 +640,12 @@ async function handleAdmin(req, res, url) {
       if (!needRole('operator')) return
       const obj = JSON.parse((await readBody(req)).toString('utf-8') || '{}')
       if (!obj.id) return json(res, 400, { message: '缺少 id' })
-      const isNew = !store.get(kind, obj.id)
+      const existing = store.get(kind, obj.id)
+      // 安全约束：已发布状态的 API 不允许直接编辑，需先下线
+      if (kind === 'apis' && existing && existing.status === 'published') {
+        return json(res, 409, { message: `API「${existing.name}」当前为已发布状态，不允许编辑，请先下线` })
+      }
+      const isNew = !existing
       store.upsert(kind, obj)
       const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
       audit(`${isNew ? '新建' : '更新'}${kindLabel}`, obj.name ?? obj.id)

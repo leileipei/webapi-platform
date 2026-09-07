@@ -178,6 +178,12 @@ export default function ApiForm() {
     if (isEdit && !existing) {
       toast.error('未找到该 API')
       navigate('/apis')
+      return
+    }
+    // 已发布状态的 API 不允许编辑，防止在线接口被改动
+    if (isEdit && existing?.status === 'published') {
+      toast.error('已发布状态的 API 不允许编辑，请先下线')
+      navigate(`/apis/${existing.id}`)
     }
   }, [isEdit, existing, navigate])
 

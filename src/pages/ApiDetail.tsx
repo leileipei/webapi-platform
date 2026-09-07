@@ -185,9 +185,15 @@ export default function ApiDetail() {
           <Button variant="outline" onClick={() => navigate(`/logs?apiId=${api.id}`)}>
             <ScrollText className="mr-1 h-4 w-4" /> 调用日志
           </Button>
-          <Button variant="outline" onClick={() => navigate(`/apis/${api.id}/edit`)}>
-            <Pencil className="mr-1 h-4 w-4" /> 编辑
-          </Button>
+          {api.status === 'published' ? (
+            <Button variant="outline" disabled className="text-slate-300" title="已发布状态不允许编辑，请先下线">
+              <Pencil className="mr-1 h-4 w-4" /> 编辑
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={() => navigate(`/apis/${api.id}/edit`)}>
+              <Pencil className="mr-1 h-4 w-4" /> 编辑
+            </Button>
+          )}
           {api.status !== 'published' ? (
             <Button onClick={() => changeStatus('published')}>
               <ArrowUpCircle className="mr-1 h-4 w-4" /> 发布上线
