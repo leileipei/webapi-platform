@@ -4,3 +4,5 @@ dist/
 .DS_Store
 server/data.db
 scripts/screenshot.mjs
+test-results/
+playwright-report/
