@@ -14,6 +14,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useStore, newId } from '@/lib/store'
+import { copyText } from '@/lib/clipboard'
 import { randomKey } from '@/lib/metrics'
 import type { AppCredential } from '@/types'
 
@@ -30,9 +31,10 @@ export default function Apps() {
   const [toReset, setToReset] = useState<AppCredential | null>(null)
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({})
 
-  const copy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text).catch(() => {})
-    toast.success(`${label}已复制`)
+  const copy = async (text: string, label: string) => {
+    const okCopy = await copyText(text)
+    if (okCopy) toast.success(`${label}已复制`)
+    else toast.error('复制失败，请手动选中内容复制')
   }
 
   const openNew = () => {
@@ -116,23 +118,23 @@ export default function Apps() {
                 <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
                   <span className="shrink-0 text-xs text-slate-500">AccessKey</span>
                   <code className="flex-1 truncate text-xs">{app.accessKey}</code>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copy(app.accessKey, 'AccessKey ')}>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title="复制 AccessKey" onClick={() => copy(app.accessKey, 'AccessKey ')}>
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
                 </div>
                 <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
                   <span className="shrink-0 text-xs text-slate-500">SecretKey</span>
                   <code className="flex-1 truncate text-xs">{mask(app.secretKey, !!showSecret[app.id])}</code>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowSecret((s) => ({ ...s, [app.id]: !s[app.id] }))}>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title={showSecret[app.id] ? '隐藏 SecretKey' : '显示 SecretKey'} onClick={() => setShowSecret((s) => ({ ...s, [app.id]: !s[app.id] }))}>
                     {showSecret[app.id] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copy(app.secretKey, 'SecretKey ')}>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title="复制 SecretKey" onClick={() => copy(app.secretKey, 'SecretKey ')}>
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     variant="ghost" size="icon"
-                    className={app.status === 'active' ? 'h-7 w-7 text-slate-300' : 'h-7 w-7 text-amber-600'}
-                    title={app.status === 'active' ? '请先停用应用，再重置 SecretKey' : '重置密钥'}
+                    className={app.status === 'active' ? 'h-7 w-7 cursor-not-allowed text-slate-300' : 'h-7 w-7 text-amber-600'}
+                    title={app.status === 'active' ? '启用中的应用不可重置密钥：请先停用该应用' : '重置 SecretKey（需二次确认，旧密钥立即失效）'}
                     onClick={() => requestRegenerate(app)}
                   >
                     <RefreshCw className="h-3.5 w-3.5" />

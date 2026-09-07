@@ -24,7 +24,8 @@ export default function ApiList() {
   const [status, setStatus] = useState('all')
   const [method, setMethod] = useState('all')
   const [groupId, setGroupId] = useState('all')
-  const [toDelete, setToDelete] = useState<ApiItem | null>(null)
+  // 需二次确认的操作：下线 / 废弃 / 删除
+  const [pending, setPending] = useState<{ api: ApiItem; action: 'offline' | 'deprecated' | 'delete' } | null>(null)
 
   const groupName = (id: string) => state.groups.find((g) => g.id === id)?.name ?? '未分组'
 
@@ -41,6 +42,35 @@ export default function ApiList() {
   const changeStatus = (api: ApiItem, s: ApiItem['status']) => {
     dispatch({ type: 'setApiStatus', id: api.id, status: s })
     toast.success(`「${api.name}」已${{ published: '发布上线', offline: '下线', deprecated: '标记废弃', draft: '退回草稿' }[s]}`)
+  }
+
+  const confirmMeta = {
+    offline: {
+      title: `下线 API「${pending?.api.name ?? ''}」？`,
+      desc: '下线后网关立即拒绝该 API 的全部调用（返回 403），在线调用方会受到影响。下线后可随时重新发布上线。',
+      btn: '确认下线', cls: 'bg-amber-600 hover:bg-amber-700',
+    },
+    deprecated: {
+      title: `废弃 API「${pending?.api.name ?? ''}」？`,
+      desc: '标记废弃后该 API 不可调用、不可再发布，仅保留历史数据。废弃状态的 API 才允许删除。',
+      btn: '确认废弃', cls: 'bg-red-600 hover:bg-red-700',
+    },
+    delete: {
+      title: `删除 API「${pending?.api.name ?? ''}」？`,
+      desc: '删除后调用方将立即无法访问该路径，相关应用授权同步移除。此操作不可撤销。',
+      btn: '确认删除', cls: 'bg-red-600 hover:bg-red-700',
+    },
+  } as const
+
+  const doConfirm = () => {
+    if (!pending) return
+    if (pending.action === 'delete') {
+      dispatch({ type: 'deleteApi', id: pending.api.id })
+      toast.success(`已删除「${pending.api.name}」`)
+    } else {
+      changeStatus(pending.api, pending.action)
+    }
+    setPending(null)
   }
 
   return (
@@ -145,19 +175,25 @@ export default function ApiList() {
                           </DropdownMenuItem>
                         )}
                         {a.status === 'published' && (
-                          <DropdownMenuItem onClick={() => changeStatus(a, 'offline')}>
+                          <DropdownMenuItem onClick={() => setPending({ api: a, action: 'offline' })}>
                             <ArrowDownCircle className="mr-2 h-3.5 w-3.5 text-amber-600" /> 下线
                           </DropdownMenuItem>
                         )}
                         {a.status !== 'deprecated' && (
-                          <DropdownMenuItem onClick={() => changeStatus(a, 'deprecated')}>
+                          <DropdownMenuItem onClick={() => setPending({ api: a, action: 'deprecated' })}>
                             <Ban className="mr-2 h-3.5 w-3.5 text-red-500" /> 标记废弃
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-red-600" onClick={() => setToDelete(a)}>
-                          <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除
-                        </DropdownMenuItem>
+                        {a.status === 'deprecated' ? (
+                          <DropdownMenuItem className="text-red-600" onClick={() => setPending({ api: a, action: 'delete' })}>
+                            <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem disabled className="text-slate-300" title="仅废弃状态的 API 才能删除">
+                            <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除（需先废弃）
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -168,27 +204,24 @@ export default function ApiList() {
         </Table>
       </Card>
 
-      <AlertDialog open={!!toDelete} onOpenChange={(open) => !open && setToDelete(null)}>
+      <AlertDialog open={!!pending} onOpenChange={(open) => !open && setPending(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除 API「{toDelete?.name}」？</AlertDialogTitle>
+            <AlertDialogTitle>{pending ? confirmMeta[pending.action].title : ''}</AlertDialogTitle>
             <AlertDialogDescription>
-              删除后调用方将立即无法访问 <span className="font-mono">{toDelete?.path}</span>，相关应用授权同步移除。此操作不可撤销。
+              {pending ? confirmMeta[pending.action].desc : ''}
+              {pending?.action === 'delete' && (
+                <span className="mt-1 block font-mono text-xs">{pending.api.path}</span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-red-600 hover:bg-red-700"
-              onClick={() => {
-                if (toDelete) {
-                  dispatch({ type: 'deleteApi', id: toDelete.id })
-                  toast.success(`已删除「${toDelete.name}」`)
-                }
-                setToDelete(null)
-              }}
+              className={pending ? confirmMeta[pending.action].cls : ''}
+              onClick={doConfirm}
             >
-              确认删除
+              {pending ? confirmMeta[pending.action].btn : '确认'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

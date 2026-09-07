@@ -641,6 +641,10 @@ async function handleAdmin(req, res, url) {
     if (kind && req.method === 'DELETE' && id) {
       if (!needRole('admin')) return
       const existed = store.get(kind, id)
+      // 安全约束：仅废弃（deprecated）状态的 API 允许删除，防止误删在线接口
+      if (kind === 'apis' && existed && existed.status !== 'deprecated') {
+        return json(res, 409, { message: `API「${existed.name}」当前状态为 ${existed.status}，仅废弃状态的 API 才能删除` })
+      }
       store.remove(kind, id)
       const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
       audit(`删除${kindLabel}`, existed?.name ?? id)

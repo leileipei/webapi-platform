@@ -17,6 +17,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { useStore } from '@/lib/store'
+import { copyText } from '@/lib/clipboard'
 import { useMetrics } from '@/lib/api'
 import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, AUTH_LABELS } from '@/components/badges'
@@ -139,6 +140,21 @@ export default function ApiDetail() {
     toast.success('状态已更新')
   }
 
+  // 下线 / 废弃 需弹窗二次确认
+  const [confirmAction, setConfirmAction] = useState<null | 'offline' | 'deprecated'>(null)
+  const confirmMeta = {
+    offline: {
+      title: `下线 API「${api.name}」？`,
+      desc: '下线后网关立即拒绝该 API 的全部调用（返回 403），在线调用方会受到影响。下线后可随时重新发布上线。',
+      btn: '确认下线', cls: 'bg-amber-600 hover:bg-amber-700',
+    },
+    deprecated: {
+      title: `废弃 API「${api.name}」？`,
+      desc: '标记废弃后该 API 不可调用、不可再发布，仅保留历史数据。废弃状态的 API 才允许删除。',
+      btn: '确认废弃', cls: 'bg-red-600 hover:bg-red-700',
+    },
+  } as const
+
   const curlCmd = `curl -X ${api.method} "https://gateway.example.com${api.path}" \\\n  -H "X-Access-Key: <YOUR_ACCESS_KEY>"${api.method !== 'GET' ? ' \\\n  -H "Content-Type: application/json" \\\n  -d \'{}\'' : ''}`
 
   return (
@@ -172,32 +188,62 @@ export default function ApiDetail() {
               <ArrowUpCircle className="mr-1 h-4 w-4" /> 发布上线
             </Button>
           ) : (
-            <Button variant="outline" className="text-amber-600" onClick={() => changeStatus('offline')}>
+            <Button variant="outline" className="text-amber-600" onClick={() => setConfirmAction('offline')}>
               <ArrowDownCircle className="mr-1 h-4 w-4" /> 下线
             </Button>
           )}
           {api.status !== 'deprecated' && (
-            <Button variant="outline" className="text-red-500" onClick={() => changeStatus('deprecated')}>
+            <Button variant="outline" className="text-red-500" onClick={() => setConfirmAction('deprecated')}>
               <Ban className="mr-1 h-4 w-4" /> 废弃
             </Button>
           )}
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="outline" className="text-red-600"><Trash2 className="mr-1 h-4 w-4" /> 删除</Button>
-            </AlertDialogTrigger>
+
+          {/* 下线 / 废弃 二次确认 */}
+          <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>删除 API「{api.name}」？</AlertDialogTitle>
-                <AlertDialogDescription>删除后不可恢复，相关应用授权将同步移除。</AlertDialogDescription>
+                <AlertDialogTitle>{confirmAction ? confirmMeta[confirmAction].title : ''}</AlertDialogTitle>
+                <AlertDialogDescription>{confirmAction ? confirmMeta[confirmAction].desc : ''}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={() => { dispatch({ type: 'deleteApi', id: api.id }); toast.success('已删除'); navigate('/apis') }}>
-                  确认删除
+                <AlertDialogAction
+                  className={confirmAction ? confirmMeta[confirmAction].cls : ''}
+                  onClick={() => {
+                    if (confirmAction) changeStatus(confirmAction)
+                    setConfirmAction(null)
+                  }}
+                >
+                  {confirmAction ? confirmMeta[confirmAction].btn : '确认'}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+
+          {/* 仅废弃状态可删除 */}
+          {api.status === 'deprecated' ? (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" className="text-red-600"><Trash2 className="mr-1 h-4 w-4" /> 删除</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>删除 API「{api.name}」？</AlertDialogTitle>
+                  <AlertDialogDescription>删除后不可恢复，相关应用授权将同步移除。</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>取消</AlertDialogCancel>
+                  <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={() => { dispatch({ type: 'deleteApi', id: api.id }); toast.success('已删除'); navigate('/apis') }}>
+                    确认删除
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          ) : (
+            <Button variant="outline" className="text-slate-300" disabled title="仅废弃状态的 API 才能删除">
+              <Trash2 className="mr-1 h-4 w-4" /> 删除
+            </Button>
+          )}
         </div>
       </div>
 
@@ -292,10 +338,14 @@ export default function ApiDetail() {
               <CardTitle className="text-base">调用方式</CardTitle>
               <Button
                 variant="outline" size="sm"
-                onClick={() => {
-                  navigator.clipboard.writeText(curlCmd).catch(() => {})
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 1500)
+                onClick={async () => {
+                  const okCopy = await copyText(curlCmd)
+                  if (okCopy) {
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 1500)
+                  } else {
+                    toast.error('复制失败，请手动选中内容复制')
+                  }
                 }}
               >
                 {copied ? <Check className="mr-1 h-3.5 w-3.5 text-emerald-600" /> : <Copy className="mr-1 h-3.5 w-3.5" />} 复制 cURL
