@@ -30,6 +30,14 @@ export const authStorage = {
   },
 }
 
+/** 角色等级：viewer < operator < admin，用于前端按角色隐藏/禁用写操作入口 */
+const ROLE_LEVEL: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 }
+export const hasMinRole = (role: Role, min: Role): boolean => ROLE_LEVEL[role] >= ROLE_LEVEL[min]
+/** 当前登录角色是否可执行写操作（注册/编辑/上下线/授权/确认告警等，对应服务端 operator 及以上） */
+export const canWrite = (): boolean => hasMinRole(authStorage.getRole(), 'operator')
+/** 当前登录角色是否为管理员（删除、用户管理、备份归档等，对应服务端 admin） */
+export const isAdmin = (): boolean => authStorage.getRole() === 'admin'
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const token = authStorage.getToken()
   const res = await fetch(url, {

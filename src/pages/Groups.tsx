@@ -12,10 +12,13 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useStore, newId } from '@/lib/store'
+import { canWrite, isAdmin } from '@/lib/api'
 import type { ApiGroup } from '@/types'
 
 export default function Groups() {
   const { state, dispatch } = useStore()
+  const write = canWrite()
+  const admin = isAdmin()
   const [editing, setEditing] = useState<ApiGroup | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toDelete, setToDelete] = useState<ApiGroup | null>(null)
@@ -47,7 +50,7 @@ export default function Groups() {
           <h1 className="text-2xl font-bold">分组管理</h1>
           <p className="mt-1 text-sm text-slate-500">按业务域组织 API，便于授权与统计</p>
         </div>
-        <Button onClick={openNew}><Plus className="mr-1 h-4 w-4" /> 新建分组</Button>
+        {write && <Button onClick={openNew}><Plus className="mr-1 h-4 w-4" /> 新建分组</Button>}
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -64,14 +67,20 @@ export default function Groups() {
                     <div className="text-xs text-slate-400">{apiCount(g.id)} 个 API · 创建于 {g.createdAt}</div>
                   </div>
                 </div>
-                <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditing({ ...g }); setDialogOpen(true) }}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600" onClick={() => setToDelete(g)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
+                {(write || admin) && (
+                  <div className="flex gap-1">
+                    {write && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditing({ ...g }); setDialogOpen(true) }}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                    {admin && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600" onClick={() => setToDelete(g)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
               <p className="mt-3 line-clamp-2 text-sm text-slate-500">{g.description || '暂无描述'}</p>
             </CardContent>

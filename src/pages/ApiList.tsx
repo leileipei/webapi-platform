@@ -15,11 +15,14 @@ import {
 import { useStore } from '@/lib/store'
 import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, AUTH_LABELS } from '@/components/badges'
+import { canWrite, isAdmin } from '@/lib/api'
 import type { ApiItem } from '@/types'
 
 export default function ApiList() {
   const { state, dispatch } = useStore()
   const navigate = useNavigate()
+  const write = canWrite()
+  const admin = isAdmin()
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState('all')
   const [method, setMethod] = useState('all')
@@ -86,9 +89,11 @@ export default function ApiList() {
           <h1 className="text-2xl font-bold">API 管理</h1>
           <p className="mt-1 text-sm text-slate-500">共 {state.apis.length} 个 API，筛选后 {filtered.length} 个</p>
         </div>
-        <Button onClick={() => navigate('/apis/new')}>
-          <Plus className="mr-1 h-4 w-4" /> 注册 API
-        </Button>
+        {write && (
+          <Button onClick={() => navigate('/apis/new')}>
+            <Plus className="mr-1 h-4 w-4" /> 注册 API
+          </Button>
+        )}
       </div>
 
       {/* Filters */}
@@ -171,7 +176,7 @@ export default function ApiList() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => navigate(`/apis/${a.id}`)}>查看详情</DropdownMenuItem>
-                        {a.status === 'published' ? (
+                        {write && (a.status === 'published' ? (
                           <DropdownMenuItem disabled className="text-slate-300" title="已发布状态不允许编辑，请先下线">
                             <Pencil className="mr-2 h-3.5 w-3.5" /> 编辑（需先下线）
                           </DropdownMenuItem>
@@ -179,25 +184,25 @@ export default function ApiList() {
                           <DropdownMenuItem onClick={() => navigate(`/apis/${a.id}/edit`)}>
                             <Pencil className="mr-2 h-3.5 w-3.5" /> 编辑
                           </DropdownMenuItem>
-                        )}
-                        <DropdownMenuSeparator />
-                        {a.status !== 'published' && (
+                        ))}
+                        {write && <DropdownMenuSeparator />}
+                        {write && a.status !== 'published' && (
                           <DropdownMenuItem onClick={() => changeStatus(a, 'published')}>
                             <ArrowUpCircle className="mr-2 h-3.5 w-3.5 text-emerald-600" /> 发布上线
                           </DropdownMenuItem>
                         )}
-                        {a.status === 'published' && (
+                        {write && a.status === 'published' && (
                           <DropdownMenuItem onClick={() => setPending({ api: a, action: 'offline' })}>
                             <ArrowDownCircle className="mr-2 h-3.5 w-3.5 text-amber-600" /> 下线
                           </DropdownMenuItem>
                         )}
-                        {a.status !== 'deprecated' && (
+                        {write && a.status !== 'deprecated' && (
                           <DropdownMenuItem onClick={() => setPending({ api: a, action: 'deprecated' })}>
                             <Ban className="mr-2 h-3.5 w-3.5 text-red-500" /> 标记废弃
                           </DropdownMenuItem>
                         )}
-                        <DropdownMenuSeparator />
-                        {a.status === 'deprecated' ? (
+                        {admin && <DropdownMenuSeparator />}
+                        {admin && (a.status === 'deprecated' ? (
                           <DropdownMenuItem className="text-red-600" onClick={() => setPending({ api: a, action: 'delete' })}>
                             <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除
                           </DropdownMenuItem>
@@ -205,7 +210,7 @@ export default function ApiList() {
                           <DropdownMenuItem disabled className="text-slate-300" title="仅废弃状态的 API 才能删除">
                             <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除（需先废弃）
                           </DropdownMenuItem>
-                        )}
+                        ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -263,9 +268,11 @@ export default function ApiList() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <p className="text-xs text-slate-400">
-        找不到想要的 API？<Link to="/apis/new" className="text-blue-600 hover:underline">立即注册</Link>
-      </p>
+      {write && (
+        <p className="text-xs text-slate-400">
+          找不到想要的 API？<Link to="/apis/new" className="text-blue-600 hover:underline">立即注册</Link>
+        </p>
+      )}
     </div>
   )
 }

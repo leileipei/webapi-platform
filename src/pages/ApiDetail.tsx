@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useStore } from '@/lib/store'
 import { copyText } from '@/lib/clipboard'
-import { useMetrics } from '@/lib/api'
+import { useMetrics, canWrite, isAdmin } from '@/lib/api'
 import { fmtNum } from '@/lib/metrics'
 import { MethodBadge, StatusBadge, HealthDot, AUTH_LABELS } from '@/components/badges'
 import { useConnectivityTest } from '@/components/ConnectivityTest'
@@ -70,6 +70,8 @@ export default function ApiDetail() {
   const [metricsVersion, setMetricsVersion] = useState(0)
   const metrics = useMetrics(api?.id, 30, metricsVersion)
   const connTest = useConnectivityTest()
+  const write = canWrite()
+  const admin = isAdmin()
 
   if (!api) {
     return (
@@ -179,13 +181,15 @@ export default function ApiDetail() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => connTest.run(api.backendUrl, api.method, api.timeout)}>
-            <PlugZap className="mr-1 h-4 w-4" /> 测试连通
-          </Button>
+          {write && (
+            <Button variant="outline" onClick={() => connTest.run(api.backendUrl, api.method, api.timeout)}>
+              <PlugZap className="mr-1 h-4 w-4" /> 测试连通
+            </Button>
+          )}
           <Button variant="outline" onClick={() => navigate(`/logs?apiId=${api.id}`)}>
             <ScrollText className="mr-1 h-4 w-4" /> 调用日志
           </Button>
-          {api.status === 'published' ? (
+          {write && (api.status === 'published' ? (
             <Button variant="outline" disabled className="text-slate-300" title="已发布状态不允许编辑，请先下线">
               <Pencil className="mr-1 h-4 w-4" /> 编辑
             </Button>
@@ -193,8 +197,8 @@ export default function ApiDetail() {
             <Button variant="outline" onClick={() => navigate(`/apis/${api.id}/edit`)}>
               <Pencil className="mr-1 h-4 w-4" /> 编辑
             </Button>
-          )}
-          {api.status !== 'published' ? (
+          ))}
+          {write && (api.status !== 'published' ? (
             <Button onClick={() => changeStatus('published')}>
               <ArrowUpCircle className="mr-1 h-4 w-4" /> 发布上线
             </Button>
@@ -202,8 +206,8 @@ export default function ApiDetail() {
             <Button variant="outline" className="text-amber-600" onClick={() => setConfirmAction('offline')}>
               <ArrowDownCircle className="mr-1 h-4 w-4" /> 下线
             </Button>
-          )}
-          {api.status !== 'deprecated' && (
+          ))}
+          {write && api.status !== 'deprecated' && (
             <Button variant="outline" className="text-red-500" onClick={() => setConfirmAction('deprecated')}>
               <Ban className="mr-1 h-4 w-4" /> 废弃
             </Button>
@@ -257,8 +261,8 @@ export default function ApiDetail() {
             </AlertDialogContent>
           </AlertDialog>
 
-          {/* 仅废弃状态可删除 */}
-          {api.status === 'deprecated' ? (
+          {/* 仅废弃状态可删除（删除为管理员权限） */}
+          {admin && (api.status === 'deprecated' ? (
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" className="text-red-600"><Trash2 className="mr-1 h-4 w-4" /> 删除</Button>
@@ -280,7 +284,7 @@ export default function ApiDetail() {
             <Button variant="outline" className="text-slate-300" disabled title="仅废弃状态的 API 才能删除">
               <Trash2 className="mr-1 h-4 w-4" /> 删除
             </Button>
-          )}
+          ))}
         </div>
       </div>
 

@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useStore, newId } from '@/lib/store'
-import { useMetrics, useMinuteMetrics, toLocal } from '@/lib/api'
+import { useMetrics, useMinuteMetrics, toLocal, canWrite, isAdmin } from '@/lib/api'
 import type { AlertRule, AlertMetric, AlertLevel } from '@/types'
 
 const METRIC_LABELS: Record<AlertMetric, { label: string; unit: string }> = {
@@ -31,6 +31,8 @@ const LEVEL_META: Record<AlertLevel, { label: string; cls: string; dot: string }
 
 export default function Monitor() {
   const { state, dispatch } = useStore()
+  const write = canWrite()
+  const admin = isAdmin()
   const [editing, setEditing] = useState<AlertRule | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [realtimeKey, setRealtimeKey] = useState(0)
@@ -82,7 +84,7 @@ export default function Monitor() {
             {unacked.length > 0 && <span className="ml-2 rounded bg-red-50 px-2 py-0.5 text-xs font-medium text-red-600">{unacked.length} 条未处理</span>}
           </p>
         </div>
-        {unacked.length > 0 && (
+        {write && unacked.length > 0 && (
           <Button
             variant="outline"
             onClick={() => {
@@ -181,7 +183,7 @@ export default function Monitor() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">告警规则（{state.alertRules.length}）</CardTitle>
-          <Button size="sm" onClick={openNew}><Plus className="mr-1 h-4 w-4" /> 新建规则</Button>
+          {write && <Button size="sm" onClick={openNew}><Plus className="mr-1 h-4 w-4" /> 新建规则</Button>}
         </CardHeader>
         <Table>
           <TableHeader>
@@ -202,20 +204,26 @@ export default function Monitor() {
                 <TableCell className="font-mono text-sm">&gt; {r.threshold}{METRIC_LABELS[r.metric].unit}</TableCell>
                 <TableCell><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${LEVEL_META[r.level].cls}`}>{LEVEL_META[r.level].label}</span></TableCell>
                 <TableCell>
-                  <Switch checked={r.enabled} onCheckedChange={(v) => dispatch({ type: 'upsertRule', rule: { ...r, enabled: v } })} />
+                  <Switch checked={r.enabled} disabled={!write} onCheckedChange={(v) => dispatch({ type: 'upsertRule', rule: { ...r, enabled: v } })} />
                 </TableCell>
                 <TableCell>
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditing({ ...r }); setDialogOpen(true) }}>
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600"
-                      onClick={() => { dispatch({ type: 'deleteRule', id: r.id }); toast.success('规则已删除') }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+                  {(write || admin) && (
+                    <div className="flex gap-1">
+                      {write && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditing({ ...r }); setDialogOpen(true) }}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {admin && (
+                        <Button
+                          variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600"
+                          onClick={() => { dispatch({ type: 'deleteRule', id: r.id }); toast.success('规则已删除') }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
@@ -281,7 +289,7 @@ export default function Monitor() {
                   {r.acked ? <span className="text-xs text-slate-400">已处理</span> : <span className="text-xs font-medium text-red-600">未处理</span>}
                 </TableCell>
                 <TableCell>
-                  {!r.acked && (
+                  {write && !r.acked && (
                     <Button variant="outline" size="sm" onClick={() => dispatch({ type: 'ackAlert', id: r.id })}>标记处理</Button>
                   )}
                 </TableCell>

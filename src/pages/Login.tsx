@@ -57,7 +57,7 @@ export default function Login() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500"
-                placeholder="admin"
+                placeholder="请输入用户名"
               />
             </div>
             <div className="space-y-1.5">
@@ -69,7 +69,7 @@ export default function Login() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500"
-                placeholder="••••••••"
+                placeholder="请输入密码"
               />
             </div>
             {error && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</p>}
@@ -77,7 +77,6 @@ export default function Login() {
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               登 录
             </Button>
-            <p className="text-center text-xs text-slate-500">初始账号 admin / Admin@123，登录后请尽快修改密码</p>
           </form>
         </CardContent>
       </Card>

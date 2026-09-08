@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useStore, newId } from '@/lib/store'
-import { apiClient } from '@/lib/api'
+import { apiClient, canWrite } from '@/lib/api'
 import type { ApiItem, HttpMethod, AuthType, Protocol, ParamDoc } from '@/types'
 
 interface TestResult {
@@ -175,6 +175,12 @@ export default function ApiForm() {
   }, [existing])
 
   useEffect(() => {
+    // 只读角色无注册/编辑入口，直接访问 URL 也会被引导回列表页
+    if (!canWrite()) {
+      toast.error('当前为只读角色，无注册/编辑 API 权限')
+      navigate('/apis')
+      return
+    }
     if (isEdit && !existing) {
       toast.error('未找到该 API')
       navigate('/apis')

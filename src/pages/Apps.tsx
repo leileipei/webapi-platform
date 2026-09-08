@@ -16,6 +16,7 @@ import {
 import { useStore, newId } from '@/lib/store'
 import { copyText } from '@/lib/clipboard'
 import { randomKey } from '@/lib/metrics'
+import { canWrite, isAdmin } from '@/lib/api'
 import type { AppCredential } from '@/types'
 
 function mask(s: string, visible: boolean): string {
@@ -25,6 +26,8 @@ function mask(s: string, visible: boolean): string {
 
 export default function Apps() {
   const { state, dispatch } = useStore()
+  const write = canWrite()
+  const admin = isAdmin()
   const [editing, setEditing] = useState<AppCredential | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toDelete, setToDelete] = useState<AppCredential | null>(null)
@@ -74,7 +77,7 @@ export default function Apps() {
           <h1 className="text-2xl font-bold">应用与密钥</h1>
           <p className="mt-1 text-sm text-slate-500">管理 API 调用方的 AccessKey / SecretKey 与接口授权</p>
         </div>
-        <Button onClick={openNew}><Plus className="mr-1 h-4 w-4" /> 新建应用</Button>
+        {write && <Button onClick={openNew}><Plus className="mr-1 h-4 w-4" /> 新建应用</Button>}
       </div>
 
       <div className="space-y-4">
@@ -97,20 +100,26 @@ export default function Apps() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-500">启用</span>
-                  <Switch
-                    checked={app.status === 'active'}
-                    onCheckedChange={(v) => {
-                      dispatch({ type: 'upsertApp', app: { ...app, status: v ? 'active' : 'disabled' } })
-                      toast.success(v ? '应用已启用' : '应用已停用，调用将被网关拒绝')
-                    }}
-                  />
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditing({ ...app }); setDialogOpen(true) }}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600" onClick={() => setToDelete(app)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {write && (
+                    <>
+                      <span className="text-xs text-slate-500">启用</span>
+                      <Switch
+                        checked={app.status === 'active'}
+                        onCheckedChange={(v) => {
+                          dispatch({ type: 'upsertApp', app: { ...app, status: v ? 'active' : 'disabled' } })
+                          toast.success(v ? '应用已启用' : '应用已停用，调用将被网关拒绝')
+                        }}
+                      />
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditing({ ...app }); setDialogOpen(true) }}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  )}
+                  {admin && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600" onClick={() => setToDelete(app)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -131,14 +140,16 @@ export default function Apps() {
                   <Button variant="ghost" size="icon" className="h-7 w-7" title="复制 SecretKey" onClick={() => copy(app.secretKey, 'SecretKey ')}>
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
-                  <Button
-                    variant="ghost" size="icon"
-                    className={app.status === 'active' ? 'h-7 w-7 cursor-not-allowed text-slate-300' : 'h-7 w-7 text-amber-600'}
-                    title={app.status === 'active' ? '启用中的应用不可重置密钥：请先停用该应用' : '重置 SecretKey（需二次确认，旧密钥立即失效）'}
-                    onClick={() => requestRegenerate(app)}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  </Button>
+                  {write && (
+                    <Button
+                      variant="ghost" size="icon"
+                      className={app.status === 'active' ? 'h-7 w-7 cursor-not-allowed text-slate-300' : 'h-7 w-7 text-amber-600'}
+                      title={app.status === 'active' ? '启用中的应用不可重置密钥：请先停用该应用' : '重置 SecretKey（需二次确认，旧密钥立即失效）'}
+                      onClick={() => requestRegenerate(app)}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
