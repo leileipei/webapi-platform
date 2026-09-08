@@ -92,6 +92,22 @@ npm run test:ui    # Playwright UI 冒烟（首次运行需 npx playwright insta
 
 两个命令均支持指向其他实例：`BASE=http://<host>:<port> npm run test:e2e`、`BASE_URL=http://<host>:<port> npm run test:ui`。
 
+## 界面截图（只读角色视角）
+
+以下截图使用只读（viewer）账号实际登录截取，展示前端按角色收敛后的界面效果：全部写操作入口（注册、编辑、上下线、删除、启停、密钥重置、告警处理等）均已隐藏，仅保留查看能力。
+
+| 登录页（无默认账号提示） | API 管理（无注册按钮） |
+|---|---|
+| ![登录页](docs/screenshots/rbac/viewer-login.png) | ![API 管理](docs/screenshots/rbac/viewer-api-list.png) |
+
+| 行内菜单（仅查看详情） | API 详情（仅调用日志入口） |
+|---|---|
+| ![行内菜单](docs/screenshots/rbac/viewer-row-menu.png) | ![API 详情](docs/screenshots/rbac/viewer-api-detail.png) |
+
+| 应用与密钥（只读） | 监控告警（只读） |
+|---|---|
+| ![应用与密钥](docs/screenshots/rbac/viewer-apps.png) | ![监控告警](docs/screenshots/rbac/viewer-monitor.png) |
+
 ## 目录结构
 
 ```
