@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { ShieldCheck, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -43,9 +43,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-slate-900 px-4">
       <Card className="w-full max-w-sm border-slate-700 bg-slate-800 text-slate-100">
         <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500">
-            <ShieldCheck className="h-6 w-6 text-white" />
-          </div>
+          <img src="/logo.png" alt="系统 logo" className="mx-auto mb-2 h-12 w-12 rounded-xl" />
           <CardTitle className="text-xl">WebAPI 管理平台</CardTitle>
           <CardDescription className="text-slate-400">管理员登录 · API Gateway Console</CardDescription>
         </CardHeader>

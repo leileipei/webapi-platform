@@ -1,7 +1,7 @@
 import { NavLink, Navigate, Outlet, useNavigate } from 'react-router'
 import { useState } from 'react'
 import {
-  LayoutDashboard, Globe, FolderTree, KeyRound, Activity, ShieldCheck,
+  LayoutDashboard, Globe, FolderTree, KeyRound, Activity,
   CircleUserRound, LogOut, LockKeyhole, ScrollText, Settings as SettingsIcon, ChevronDown,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -125,9 +125,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className="flex w-60 shrink-0 flex-col bg-slate-900 text-slate-300">
         <div className="flex items-center gap-2.5 px-5 py-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500">
-            <ShieldCheck className="h-5 w-5 text-white" />
-          </div>
+          <img src="/logo.png" alt="系统 logo" className="h-9 w-9 rounded-lg" />
           <div>
             <div className="text-sm font-semibold text-white">WebAPI 管理平台</div>
             <div className="text-[11px] text-slate-400">API Gateway Console</div>
