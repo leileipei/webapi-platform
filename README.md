@@ -120,6 +120,22 @@ npm run test:ui    # Playwright UI 冒烟（首次运行需 npx playwright insta
 |---|
 | ![测试连通弹窗](docs/screenshots/connectivity/test-dialog.png) |
 
+## 运行健康监控（可选，平台之外）
+
+系统自带 `/healthz` 健康检查端点（无需鉴权，返回 `{"ok": true, "uptime": <秒>}`），可接入任意外部监控。本项目作者的部署配套了三条轻量自动化任务（纯本地 HTTP 探测，不占模型额度），供参考复用：
+
+| 任务 | 触发方式 | 作用 |
+|---|---|---|
+| 健康检查 | 每 5 分钟定时 | 更新运行状态卡片（在线/离线、持续运行时长、探测延迟、近 30 次探测趋势） |
+| 离线告警 | 每 10 分钟条件探测 | 仅在「在线 → 离线」翻转时推送一次本地错误通知（边缘触发，不重复打扰） |
+| 恢复通知 | 每 10 分钟条件探测 | 仅在「离线 → 在线」翻转时推送一次本地成功通知 |
+
+自行搭建等价监控的最小方案（crontab 示例，离线时写入系统日志）：
+
+```bash
+*/5 * * * * curl -sf --max-time 5 http://localhost:3100/healthz > /dev/null || logger -t webapi-platform "health check failed"
+```
+
 ## 目录结构
 
 ```
