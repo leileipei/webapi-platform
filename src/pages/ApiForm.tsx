@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowLeft, Plus, Trash2, PlugZap, Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, PlugZap, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,15 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useStore, newId } from '@/lib/store'
 import { apiClient, canWrite } from '@/lib/api'
+import { TestResultView, type TestResult } from '@/components/ConnectivityTest'
 import type { ApiItem, HttpMethod, AuthType, Protocol, ParamDoc } from '@/types'
-
-interface TestResult {
-  reachable: boolean
-  status?: number
-  latency: number
-  error?: string
-  bodyPreview?: string
-}
 
 const emptyParam: ParamDoc = { name: '', type: 'string', required: false, description: '' }
 
@@ -309,6 +302,7 @@ export default function ApiForm() {
                     } catch { /* 不是合法 URL，走普通校验 */ }
                   }
                   set('path', v)
+                  setTestResult(null)
                 }}
                 className="font-mono" placeholder="/api/v1/resource/{id}"
               />
@@ -318,26 +312,7 @@ export default function ApiForm() {
               API 测试
             </Button>
           </div>
-          {testResult && testScope === 'basic' && (
-            <div className={`rounded-lg p-3 text-xs ${testResult.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-              <div className="flex items-center gap-1.5 font-medium">
-                {testResult.reachable ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
-                {testResult.reachable
-                  ? `平台 API 调用正常 · HTTP ${testResult.status} · 延迟 ${testResult.latency}ms`
-                  : testResult.error
-                    ? `网关不可达 · ${testResult.error}`
-                    : `平台 API 返回 HTTP ${testResult.status}${
-                        testResult.status === 404 ? '（该 API 尚未注册或未发布到网关，保存并发布后再测）'
-                        : testResult.status === 401 ? '（需要鉴权：请使用已授权应用的 AccessKey 调用）'
-                        : testResult.status === 403 ? '（未发布状态或无授权，发布后重试）'
-                        : testResult.status === 429 ? '（触发限流，请稍后重试）'
-                        : ''}`}
-              </div>
-              {testResult.bodyPreview && (
-                <pre className="mt-2 max-h-24 overflow-auto rounded bg-white/60 p-2 font-mono text-[11px] text-slate-600">{testResult.bodyPreview}</pre>
-              )}
-            </div>
-          )}
+          {testResult && testScope === 'basic' && <TestResultView result={testResult} variant="gateway" />}
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-1.5">
               <Label>协议</Label>
@@ -382,16 +357,8 @@ export default function ApiForm() {
               </Button>
             </div>
             {testResult && testScope === 'backend' && (
-              <div className={`mt-2 rounded-lg p-3 text-xs ${testResult.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                <div className="flex items-center gap-1.5 font-medium">
-                  {testResult.reachable ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
-                  {testResult.reachable
-                    ? `连通正常 · HTTP ${testResult.status} · 延迟 ${testResult.latency}ms`
-                    : `无法连通 · ${testResult.error}`}
-                </div>
-                {testResult.reachable && testResult.bodyPreview && (
-                  <pre className="mt-2 max-h-24 overflow-auto rounded bg-white/60 p-2 font-mono text-[11px] text-slate-600">{testResult.bodyPreview}</pre>
-                )}
+              <div className="mt-2">
+                <TestResultView result={testResult} variant="backend" />
               </div>
             )}
             <p className="text-xs text-slate-400">支持 {'{param}'} 占位符，网关转发时会用路径中的实际值替换。保存前建议先测试连接。</p>
