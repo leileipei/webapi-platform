@@ -7,6 +7,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useStore } from '@/lib/store'
 import { apiClient, authStorage, ROLE_LABEL } from '@/lib/api'
+import { APP_VERSION } from '@/lib/version'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -163,6 +164,8 @@ export default function Layout() {
               <span className="ml-1.5 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300">{ROLE_LABEL[role]}</span>
             </span>
           </div>
+          {/* 系统版本号（构建时从 package.json 注入） */}
+          <div className="mt-2 text-center text-[11px] text-slate-500">v{APP_VERSION}</div>
         </div>
       </aside>
 

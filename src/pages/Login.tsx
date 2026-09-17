@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { apiClient, authStorage } from '@/lib/api'
+import { APP_VERSION } from '@/lib/version'
 import { useStore } from '@/lib/store'
 
 export default function Login() {
@@ -45,7 +46,7 @@ export default function Login() {
         <CardHeader className="items-center text-center">
           <img src="/logo.png" alt="系统 logo" className="mx-auto mb-2 h-12 w-12 rounded-xl" />
           <CardTitle className="text-xl">WebAPI 管理平台</CardTitle>
-          <CardDescription className="text-slate-400">管理员登录 · API Gateway Console</CardDescription>
+          <CardDescription className="text-slate-400">管理员登录 · API Gateway Console · v{APP_VERSION}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="space-y-4">
