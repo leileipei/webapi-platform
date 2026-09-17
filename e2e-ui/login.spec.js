@@ -6,7 +6,7 @@ test('未登录访问根路径应跳转登录页', async ({ page }) => {
   await page.goto('/')
   await expect(page).toHaveURL(/\/login/)
   await expect(page.getByText('WebAPI 管理平台')).toBeVisible()
-  await expect(page.getByText('管理员登录 · API Gateway Console')).toBeVisible()
+  await expect(page.getByText(/API Gateway Console · v\d+\.\d+\.\d+/)).toBeVisible()
 })
 
 test('错误密码应显示错误提示且不跳转', async ({ page }) => {
