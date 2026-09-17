@@ -94,6 +94,7 @@ export default function ApiForm() {
 
   const [form, setForm] = useState<Omit<ApiItem, 'id'>>(() => defaultApi(state.groups[0]?.id ?? ''))
   const [publishNow, setPublishNow] = useState(true)
+  const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   // 测试范围：basic=基本信息（经网关测平台侧 API）；backend=后端服务地址直连
@@ -205,37 +206,46 @@ export default function ApiForm() {
     return null
   }
 
-  const submit = () => {
+  const submit = async () => {
     const err = validate()
     if (err) {
       toast.error(err)
       return
     }
+    if (saving) return
+    setSaving(true)
     const now = new Date().toISOString().slice(0, 10)
-    if (isEdit && existing) {
-      const versionChanged = existing.version !== form.version
-      const api: ApiItem = {
-        ...form,
-        id: existing.id,
-        updatedAt: now,
-        versions: versionChanged
-          ? [{ version: form.version, date: now, note: '编辑更新' }, ...existing.versions]
-          : existing.versions,
+    try {
+      if (isEdit && existing) {
+        const versionChanged = existing.version !== form.version
+        const api: ApiItem = {
+          ...form,
+          id: existing.id,
+          updatedAt: now,
+          versions: versionChanged
+            ? [{ version: form.version, date: now, note: '编辑更新' }, ...existing.versions]
+            : existing.versions,
+        }
+        // 等待后端写入成功后再跳转，避免详情页读到旧状态
+        await dispatch({ type: 'upsertApi', api })
+        toast.success(`「${api.name}」已更新`)
+        navigate(`/apis/${api.id}`)
+      } else {
+        const api: ApiItem = {
+          ...form,
+          id: newId('api'),
+          status: publishNow ? 'published' : 'draft',
+          health: publishNow ? 'healthy' : 'unknown',
+          versions: [{ version: form.version, date: now, note: '首次注册' }],
+        }
+        await dispatch({ type: 'upsertApi', api })
+        toast.success(`「${api.name}」注册成功${publishNow ? '，已发布上线' : '，当前为草稿'}`)
+        navigate(`/apis/${api.id}`)
       }
-      dispatch({ type: 'upsertApi', api })
-      toast.success(`「${api.name}」已更新`)
-      navigate(`/apis/${api.id}`)
-    } else {
-      const api: ApiItem = {
-        ...form,
-        id: newId('api'),
-        status: publishNow ? 'published' : 'draft',
-        health: publishNow ? 'healthy' : 'unknown',
-        versions: [{ version: form.version, date: now, note: '首次注册' }],
-      }
-      dispatch({ type: 'upsertApi', api })
-      toast.success(`「${api.name}」注册成功${publishNow ? '，已发布上线' : '，当前为草稿'}`)
-      navigate(`/apis/${api.id}`)
+    } catch {
+      // 后端写入失败：store 已弹出错误提示，停留在表单页便于修改后重试
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -473,7 +483,10 @@ export default function ApiForm() {
         </div>
         <div className="flex gap-3">
           <Button variant="outline" onClick={() => navigate(-1)}>取消</Button>
-          <Button onClick={submit}>{isEdit ? '保存修改' : '完成注册'}</Button>
+          <Button onClick={submit} disabled={saving}>
+            {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+            {isEdit ? '保存修改' : '完成注册'}
+          </Button>
         </div>
       </div>
     </div>

@@ -119,7 +119,8 @@ async function syncToBackend(action: Action): Promise<void> {
 
 interface StoreValue {
   state: State
-  dispatch: (action: Action) => void
+  /** 同步到后端成功后更新本地状态；返回 Promise 便于调用方等待写入完成（失败时已 toast 并继续 reject） */
+  dispatch: (action: Action) => Promise<void>
   ready: boolean
   loadError: string | null
   reload: () => void
@@ -149,8 +150,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(load, [load])
 
   const dispatch = useCallback(
-    (action: Action) => {
-      syncToBackend(action)
+    (action: Action): Promise<void> => {
+      return syncToBackend(action)
         .then(() => {
           if (action.type === 'reset') {
             load()
@@ -160,6 +161,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         })
         .catch((err) => {
           toast.error(`操作失败：${err?.message ?? '后端不可用'}`)
+          throw err
         })
     },
     [load],

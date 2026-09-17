@@ -68,6 +68,8 @@ export default function ApiDetail() {
   const [result, setResult] = useState<{ status: number; latency: number; body: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [metricsVersion, setMetricsVersion] = useState(0)
+  // 下线 / 废弃 需弹窗二次确认（hooks 必须先于任何提前 return 声明，否则会导致 React hooks 顺序错误白屏）
+  const [confirmAction, setConfirmAction] = useState<null | 'offline' | 'deprecated'>(null)
   const metrics = useMetrics(api?.id, 30, metricsVersion)
   const connTest = useConnectivityTest()
   const write = canWrite()
@@ -142,8 +144,7 @@ export default function ApiDetail() {
     toast.success('状态已更新')
   }
 
-  // 下线 / 废弃 需弹窗二次确认
-  const [confirmAction, setConfirmAction] = useState<null | 'offline' | 'deprecated'>(null)
+  // 下线 / 废弃 的弹窗确认文案
   const confirmMeta = {
     offline: {
       title: `下线 API「${api.name}」？`,

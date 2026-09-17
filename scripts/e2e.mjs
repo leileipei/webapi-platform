@@ -32,6 +32,13 @@ try {
   r = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'wrong' }) }))
   ok('错误密码被拒绝(401)', r.status === 401)
 
+  // 2c. 清理上次运行残留的冒烟数据（v1.1 起已发布 API 禁止编辑，残留会导致重复运行失败）
+  for (const appId of ['smoke-app-1', 'smoke-app-2']) {
+    await fetch(`${BASE}/admin/apps/${appId}`, { method: 'DELETE', headers: H }).catch(() => {})
+  }
+  await fetch(`${BASE}/admin/apis/smoke-api-1/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }).catch(() => {})
+  await fetch(`${BASE}/admin/apis/smoke-api-1`, { method: 'DELETE', headers: H }).catch(() => {})
+
   // 3. 注册新 API（草稿）
   const api = {
     id: 'smoke-api-1', name: '冒烟测试API', method: 'GET', path: '/api/v1/smoke/{id}',
