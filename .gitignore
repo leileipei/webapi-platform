@@ -6,3 +6,6 @@ server/data.db
 scripts/screenshot.mjs
 test-results/
 playwright-report/
+
+# Office 临时锁文件
+~$*.docx
