@@ -9,6 +9,7 @@ import {
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -106,12 +107,46 @@ export default function ApiDetail() {
       const v = debugParams[p.name]
       if (v) qs.set(p.name, v)
     }
-    // 请求体
+    // 请求体：按参数声明的类型转换（object/array 按 JSON 解析，number 转数值，boolean 转布尔）
     let body: string | undefined
     if (api.method !== 'GET' && api.bodyParams.length > 0) {
-      const obj: Record<string, string> = {}
+      const obj: Record<string, unknown> = {}
       for (const p of api.bodyParams) {
-        if (debugParams[p.name]) obj[p.name] = debugParams[p.name]
+        const raw = (debugParams[p.name] ?? '').trim()
+        if (!raw) continue
+        if (p.type === 'object' || p.type === 'array') {
+          try {
+            const parsed: unknown = JSON.parse(raw)
+            const wantArray = p.type === 'array'
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) !== wantArray) {
+              toast.error(`参数「${p.name}」应为 JSON ${wantArray ? '数组' : '对象'}，例如 ${wantArray ? '[1,2]' : '{"key":"value"}'}`)
+              setRunning(false)
+              return
+            }
+            obj[p.name] = parsed
+          } catch {
+            toast.error(`参数「${p.name}」不是合法 JSON：请检查引号、逗号与括号`)
+            setRunning(false)
+            return
+          }
+        } else if (p.type === 'number') {
+          const n = Number(raw)
+          if (Number.isNaN(n)) {
+            toast.error(`参数「${p.name}」应为数字`)
+            setRunning(false)
+            return
+          }
+          obj[p.name] = n
+        } else if (p.type === 'boolean') {
+          if (!/^(true|false)$/i.test(raw)) {
+            toast.error(`参数「${p.name}」应为 true 或 false`)
+            setRunning(false)
+            return
+          }
+          obj[p.name] = raw.toLowerCase() === 'true'
+        } else {
+          obj[p.name] = raw
+        }
       }
       body = JSON.stringify(obj)
     }
@@ -456,12 +491,22 @@ export default function ApiDetail() {
                       {p.name} {p.required && <span className="text-red-500">*</span>}
                       <span className="ml-1 font-normal text-slate-400">({p.type})</span>
                     </label>
-                    <Input
-                      value={debugParams[p.name] ?? ''}
-                      onChange={(e) => setDebugParams((d) => ({ ...d, [p.name]: e.target.value }))}
-                      placeholder={p.description}
-                      className="h-9 font-mono text-xs"
-                    />
+                    {p.type === 'object' || p.type === 'array' ? (
+                      <Textarea
+                        value={debugParams[p.name] ?? ''}
+                        onChange={(e) => setDebugParams((d) => ({ ...d, [p.name]: e.target.value }))}
+                        placeholder={p.description || (p.type === 'array' ? '[1, 2, 3]' : '{"key": "value"}')}
+                        rows={3}
+                        className="font-mono text-xs"
+                      />
+                    ) : (
+                      <Input
+                        value={debugParams[p.name] ?? ''}
+                        onChange={(e) => setDebugParams((d) => ({ ...d, [p.name]: e.target.value }))}
+                        placeholder={p.description || (p.type === 'number' ? '数字' : p.type === 'boolean' ? 'true / false' : '')}
+                        className="h-9 font-mono text-xs"
+                      />
+                    )}
                   </div>
                 ))}
                 {api.status !== 'published' && (
