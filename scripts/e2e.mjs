@@ -25,7 +25,20 @@ try {
   r = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'Admin@123' }) }))
   ok('管理员登录', r.status === 200 && !!r.body.token)
   if (!r.body?.token) throw new Error('登录失败，后续用例无法执行')
-  const token = r.body.token
+  let token = r.body.token
+
+  // 2a. 初始密码账号被服务端硬阻断（除改密外所有管理接口 403），先完成强制改密再续测
+  if (r.body.mustChangePwd) {
+    const blocked = await j(await fetch(`${BASE}/admin/apis`, { headers: { Authorization: `Bearer ${token}` } }))
+    ok('初始密码状态管理接口被阻断(40310)', blocked.status === 403 && blocked.body?.code === 40310)
+    const newPwd = `E2e!${Date.now()}x`
+    const cp = await j(await fetch(`${BASE}/admin/auth/password`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ oldPassword: 'Admin@123', newPassword: newPwd }) }))
+    ok('强制改密完成', cp.status === 200)
+    const relogin = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: newPwd }) }))
+    ok('改密后重新登录', relogin.status === 200 && !!relogin.body.token && !relogin.body.mustChangePwd)
+    if (!relogin.body?.token) throw new Error('改密后登录失败')
+    token = relogin.body.token
+  }
   const H = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 
   // 2b. 错误密码应拒绝

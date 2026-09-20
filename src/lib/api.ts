@@ -56,13 +56,17 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
+    let code: number | undefined
     try {
       const data = await res.json()
       if (data?.message) msg = data.message
+      if (typeof data?.code === 'number') code = data.code
     } catch {
       // ignore
     }
-    throw new Error(msg)
+    const err = new Error(msg) as Error & { code?: number }
+    err.code = code
+    throw err
   }
   return res.json() as Promise<T>
 }

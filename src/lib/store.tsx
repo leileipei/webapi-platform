@@ -142,6 +142,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setLoadError(null)
       })
       .catch((err) => {
+        // 40310 = 账号处于强制改密状态：服务端阻断数据接口，此时渲染空壳界面+强制改密弹窗即可，
+        // 不应误报"无法连接后端服务"
+        if (err?.code === 40310) {
+          setReady(true)
+          setLoadError(null)
+          return
+        }
         setLoadError(err?.message ?? '无法连接后端')
         setReady(true)
       })

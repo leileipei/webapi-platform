@@ -6,7 +6,7 @@ import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
-import { store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics, addAudit, queryAudit, createBackup, restoreFrom, backupStream, fileSize, removeFile } from './db.js'
+import { db, store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics, addAudit, queryAudit, createBackup, restoreFrom, backupStream, fileSize, removeFile } from './db.js'
 import { ensureAdmin, login, verify, logout, changePassword, hasRole, listUsers, upsertUser, deleteUser, revokeAllSessions } from './auth.js'
 import { runArchive, listArchives, openArchive, startArchiver, RETENTION_DAYS } from './archive.js'
 
@@ -33,6 +33,14 @@ const safeEq = (a, b) => {
 }
 /** SecretKey 脱敏：仅保留前 6 后 4，供只读角色查看 */
 const maskSecret = (sk) => String(sk ?? '').slice(0, 6) + '****' + String(sk ?? '').slice(-4)
+/** 客户端真实 IP：仅在 TRUST_PROXY=1（前方有受信反向代理）时采用 X-Forwarded-For 首跳，否则取 socket 地址防伪造 */
+const clientIp = (req) => {
+  if (process.env.TRUST_PROXY === '1') {
+    const fwd = req.headers['x-forwarded-for']
+    if (fwd) return String(fwd).split(',')[0].trim()
+  }
+  return req.socket.remoteAddress
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST_DIR = join(__dirname, '..', 'dist')
@@ -309,12 +317,16 @@ async function forward(api, params, req, body, url) {
   // 替换后端地址中的 {param} 占位符
   let target = api.backendUrl
   for (const [k, v] of Object.entries(params)) target = target.replaceAll(`{${k}}`, encodeURIComponent(v))
-  if (url.search) target += url.search
+  // backendUrl 可能已自带 query（含 ?），追加时避免双问号
+  if (url.search) target += target.includes('?') ? '&' + url.search.slice(1) : url.search
 
   const headers = {}
   for (const [k, v] of Object.entries(req.headers)) {
     const key = k.toLowerCase()
-    if (['host', 'connection', 'content-length', 'transfer-encoding', 'accept-encoding'].includes(key)) continue
+    // 剥离 hop-by-hop 头与平台内部凭证（AccessKey/SecretKey 不转发给上游，防第三方后端窃取重放）
+    if (['host', 'connection', 'content-length', 'transfer-encoding', 'accept-encoding',
+      'keep-alive', 'upgrade', 'proxy-authorization', 'te', 'trailer',
+      'x-access-key', 'x-secret-key'].includes(key)) continue
     headers[k] = v
   }
   if (body.length > 0 && !headers['content-type']) headers['content-type'] = 'application/json'
@@ -348,7 +360,7 @@ async function handleGateway(req, res, url) {
   const matched = matchApi(apis, req.method, reqPath)
 
   // 审计日志：网关所有出入请求（含被拒绝的）都落库
-  const log = { method: req.method, path: reqPath + (url.search || ''), ip: req.socket.remoteAddress }
+  const log = { method: req.method, path: reqPath + (url.search || ''), ip: clientIp(req) }
   const writeLog = (status, extra = {}) =>
     addLog({ ...log, status, latency: performance.now() - start, ...extra })
 
@@ -507,10 +519,10 @@ async function handleAdmin(req, res, url) {
         if (!username || !password) return j( 400, { message: '请输入用户名和密码' })
         const result = login(String(username), String(password))
         if (!result) {
-          addAudit({ username: String(username), action: '登录失败', ip: req.socket.remoteAddress })
+          addAudit({ username: String(username), action: '登录失败', ip: clientIp(req) })
           return j( 401, { message: '用户名或密码错误' })
         }
-        addAudit({ username: result.username, role: result.role, action: '登录成功', detail: result.mustChangePwd ? '使用初始密码，需强制改密' : undefined, ip: req.socket.remoteAddress })
+        addAudit({ username: result.username, role: result.role, action: '登录成功', detail: result.mustChangePwd ? '使用初始密码，需强制改密' : undefined, ip: clientIp(req) })
         return j( 200, result)
       }
       const session = verify(req)
@@ -518,7 +530,7 @@ async function handleAdmin(req, res, url) {
       if (id === 'me' && req.method === 'GET') return j( 200, { username: session.username, role: session.role })
       if (id === 'logout' && req.method === 'POST') {
         logout(session.token)
-        addAudit({ username: session.username, role: session.role, action: '退出登录', ip: req.socket.remoteAddress })
+        addAudit({ username: session.username, role: session.role, action: '退出登录', ip: clientIp(req) })
         return j( 200, { ok: true })
       }
       if (id === 'password' && req.method === 'POST') {
@@ -526,7 +538,7 @@ async function handleAdmin(req, res, url) {
         if (!rawPwd) return j(413, { message: '请求体过大' })
         const { oldPassword, newPassword } = JSON.parse(rawPwd.toString('utf-8') || '{}')
         const r = changePassword(session.username, String(oldPassword ?? ''), String(newPassword ?? ''))
-        if (r.ok) addAudit({ username: session.username, role: session.role, action: '修改密码', ip: req.socket.remoteAddress })
+        if (r.ok) addAudit({ username: session.username, role: session.role, action: '修改密码', ip: clientIp(req) })
         return j( r.ok ? 200 : 400, r)
       }
       return j( 404, { message: '未知认证接口' })
@@ -535,6 +547,12 @@ async function handleAdmin(req, res, url) {
     // ---- 其余管理接口一律要求登录 ----
     const session = verify(req)
     if (!session) return j( 401, { message: '未登录或会话已过期' })
+
+    // ---- 强制改密硬阻断：使用初始密码的账号除 auth 段（登录/改密/退出）外不得操作任何管理接口 ----
+    const urow = db.prepare('SELECT must_change_pwd FROM users WHERE username = ?').get(session.username)
+    if (urow?.must_change_pwd) {
+      return j( 403, { code: 40310, message: '账号须先修改初始密码后才能操作系统（请通过"修改密码"完成）' })
+    }
 
     // ---- 接口级角色控制：viewer 只读 / operator 可注册、发布、编辑、确认告警 / admin 全部 ----
     const needRole = (minRole) => {
@@ -545,7 +563,7 @@ async function handleAdmin(req, res, url) {
 
     // ---- 审计辅助：记录当前会话的管理操作 ----
     const audit = (action, target, detail) =>
-      addAudit({ username: session.username, role: session.role, action, target, detail, ip: req.socket.remoteAddress })
+      addAudit({ username: session.username, role: session.role, action, target, detail, ip: clientIp(req) })
 
     // ---- 用户管理（仅 admin） ----
     if (resource === 'users') {
@@ -822,7 +840,9 @@ async function handleAdmin(req, res, url) {
     return j( 404, { message: '未知管理接口' })
   } catch (err) {
     console.error('[admin error]', err)
-    return j( err?.status ?? 400, { message: '请求处理失败：' + (err?.message ?? 'unknown') })
+    // 已知业务异常（带 status，如登录锁定 429）透传安全文案；未知异常不泄漏内部细节
+    if (err?.status) return j( err.status, { message: err.message || '请求被拒绝' })
+    return j( 400, { message: '请求格式不正确或处理失败' })
   }
 }
 

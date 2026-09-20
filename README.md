@@ -69,8 +69,9 @@ npm run server     # 启动一体化服务（默认绑定 0.0.0.0:3100）
 | `CORS_ORIGIN` | 空 | 管理接口跨域白名单（逗号分隔，如 `https://a.com,https://b.com`）；默认不下发 CORS 头，同源部署无需配置 |
 | `GATEWAY_MAX_BODY` | `10485760` | 网关单请求体上限（字节），超限返回 413 |
 | `ALLOW_LOCAL_TEST` | 关 | 置 `1` 时连通性测试允许访问本机回环地址（仅本机联调使用；云元数据地址始终拦截） |
+| `TRUST_PROXY` | 关 | 部署在 Nginx/Caddy 等反向代理之后时置 `1`，审计与登录日志将记录 `X-Forwarded-For` 首跳的真实客户端 IP（直连部署请勿开启，否则访客可伪造 IP） |
 
-> 公网部署安全基线：务必在前面加 Nginx/Caddy 终结 HTTPS；修改默认管理员密码（首次登录已强制）；按需配置 `CORS_ORIGIN`；不要开启 `ALLOW_LOCAL_TEST`。
+> 公网部署安全基线：务必在前面加 Nginx/Caddy 终结 HTTPS（反代后同步开启 `TRUST_PROXY=1` 以记录真实客户端 IP）；修改默认管理员密码（首次登录已强制，且初始密码账号在服务端被阻断一切管理操作）；按需配置 `CORS_ORIGIN`；不要开启 `ALLOW_LOCAL_TEST`。
 
 > 防火墙提示：若其他计算机无法访问，请确认服务器防火墙放行了对应端口（如 macOS 系统设置 → 网络 → 防火墙）。
 
