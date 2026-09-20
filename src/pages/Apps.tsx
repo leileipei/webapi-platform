@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useStore, newId } from '@/lib/store'
 import { copyText } from '@/lib/clipboard'
-import { randomKey } from '@/lib/metrics'
 import { canWrite, isAdmin } from '@/lib/api'
 import type { AppCredential } from '@/types'
 
@@ -23,6 +22,8 @@ function mask(s: string, visible: boolean): string {
   if (visible) return s
   return s.slice(0, 6) + '•'.repeat(12) + s.slice(-4)
 }
+/** 服务端对只读角色下发的脱敏密钥（含 **** 标记），不可复制/展示原文 */
+const isMasked = (s: string) => s.includes('****')
 
 export default function Apps() {
   const { state, dispatch } = useStore()
@@ -41,8 +42,9 @@ export default function Apps() {
   }
 
   const openNew = () => {
+    // 密钥由服务端以加密安全随机数生成，前端不再预生成
     setEditing({
-      id: newId('app'), name: '', owner: '', accessKey: randomKey('ak', 16), secretKey: randomKey('sk', 32),
+      id: newId('app'), name: '', owner: '', accessKey: '', secretKey: '',
       status: 'active', apiIds: [], createdAt: new Date().toISOString().slice(0, 10),
     })
     setDialogOpen(true)
@@ -53,7 +55,7 @@ export default function Apps() {
     if (!editing.name.trim()) return toast.error('请填写应用名称')
     if (!editing.owner.trim()) return toast.error('请填写负责人/团队')
     dispatch({ type: 'upsertApp', app: editing })
-    toast.success('应用已保存')
+    toast.success('应用已保存，AccessKey / SecretKey 由系统生成')
     setDialogOpen(false)
   }
 
@@ -66,7 +68,8 @@ export default function Apps() {
   }
 
   const regenerate = (app: AppCredential) => {
-    dispatch({ type: 'upsertApp', app: { ...app, secretKey: randomKey('sk', 32) } })
+    // 服务端校验停用状态并生成新密钥（resetSecret 标记）
+    dispatch({ type: 'upsertApp', app: { ...app, secretKey: '', resetSecret: true } })
     toast.success(`「${app.name}」SecretKey 已重置，旧密钥立即失效`)
   }
 
@@ -134,12 +137,17 @@ export default function Apps() {
                 <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
                   <span className="shrink-0 text-xs text-slate-500">SecretKey</span>
                   <code className="flex-1 truncate text-xs">{mask(app.secretKey, !!showSecret[app.id])}</code>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" title={showSecret[app.id] ? '隐藏 SecretKey' : '显示 SecretKey'} onClick={() => setShowSecret((s) => ({ ...s, [app.id]: !s[app.id] }))}>
-                    {showSecret[app.id] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" title="复制 SecretKey" onClick={() => copy(app.secretKey, 'SecretKey ')}>
-                    <Copy className="h-3.5 w-3.5" />
-                  </Button>
+                  {!isMasked(app.secretKey) && (
+                    <>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title={showSecret[app.id] ? '隐藏 SecretKey' : '显示 SecretKey'} onClick={() => setShowSecret((s) => ({ ...s, [app.id]: !s[app.id] }))}>
+                        {showSecret[app.id] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="复制 SecretKey" onClick={() => copy(app.secretKey, 'SecretKey ')}>
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  )}
+                  {isMasked(app.secretKey) && <span className="text-[10px] text-slate-400">仅操作员/管理员可见</span>}
                   {write && (
                     <Button
                       variant="ghost" size="icon"

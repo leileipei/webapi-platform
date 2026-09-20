@@ -1,5 +1,6 @@
 // 内置示例数据 —— 首次启动时写入 SQLite
 // 后端地址指向内置 mock 上游（/upstream/*），保证示例 API 可真实调通
+import { randomBytes } from 'node:crypto'
 
 function daysAgo(n) {
   const d = new Date()
@@ -148,9 +149,11 @@ export function seedApis() {
 }
 
 function randomKey(prefix, len) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  // 加密安全随机数（base64url 字符集），演示数据密钥同样不可预测
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+  const buf = randomBytes(len)
   let s = ''
-  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)]
+  for (let i = 0; i < len; i++) s += chars[buf[i] % chars.length]
   return `${prefix}_${s}`
 }
 

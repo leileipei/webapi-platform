@@ -25,7 +25,7 @@ const NAV: { to: string; label: string; icon: typeof LayoutDashboard; end?: bool
   { to: '/settings', label: '系统管理', icon: SettingsIcon, adminOnly: true },
 ]
 
-function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+function ChangePasswordDialog({ open, onOpenChange, forced = false }: { open: boolean; onOpenChange: (v: boolean) => void; forced?: boolean }) {
   const navigate = useNavigate()
   const [oldPassword, setOldPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -49,11 +49,13 @@ function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={open} onOpenChange={(v) => { if (!forced || v) onOpenChange(v) }}>
+      <DialogContent onInteractOutside={forced ? (e) => e.preventDefault() : undefined} onEscapeKeyDown={forced ? (e) => e.preventDefault() : undefined}>
         <DialogHeader>
-          <DialogTitle>修改密码</DialogTitle>
-          <DialogDescription>修改成功后所有会话将失效，需要重新登录</DialogDescription>
+          <DialogTitle>{forced ? '请修改初始密码' : '修改密码'}</DialogTitle>
+          <DialogDescription>
+            {forced ? '检测到当前账号仍在使用初始密码，为保障系统安全，必须先修改密码才能继续使用' : '修改成功后所有会话将失效，需要重新登录'}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
@@ -70,7 +72,7 @@ function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          {!forced && <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>}
           <Button onClick={submit} disabled={saving}>确认修改</Button>
         </DialogFooter>
       </DialogContent>
@@ -81,7 +83,9 @@ function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 export default function Layout() {
   const { state, ready, loadError, reload } = useStore()
   const navigate = useNavigate()
-  const [pwdOpen, setPwdOpen] = useState(false)
+  // 首次登录/初始密码未改：强制弹出改密对话框，不可跳过
+  const pwdForced = authStorage.getMustChange()
+  const [pwdOpen, setPwdOpen] = useState(pwdForced)
   const unacked = state.alertRecords.filter((r) => !r.acked).length
   const role = authStorage.getRole()
 
@@ -169,7 +173,7 @@ export default function Layout() {
         </div>
       </aside>
 
-      <ChangePasswordDialog open={pwdOpen} onOpenChange={setPwdOpen} />
+      <ChangePasswordDialog open={pwdOpen} onOpenChange={setPwdOpen} forced={pwdForced} />
 
       {/* Main */}
       <main className="flex flex-1 flex-col overflow-hidden">

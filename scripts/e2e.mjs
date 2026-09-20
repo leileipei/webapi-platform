@@ -63,32 +63,55 @@ try {
   r = await j(await fetch(`${BASE}/admin/apis/${api.id}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'published' }) }))
   ok('发布 API', r.status === 200 && r.body.status === 'published')
 
-  // 7. 创建应用并授权
-  const app = { id: 'smoke-app-1', name: '冒烟测试应用', owner: 'QA', accessKey: 'ak_smoke1234567890', secretKey: 'sk_smoke_secret_0000000000000001', status: 'active', apiIds: [api.id], createdAt: '2026-09-07' }
+  // 7. 创建应用并授权（密钥由服务端生成，不信任客户端提交值）
+  const app = { id: 'smoke-app-1', name: '冒烟测试应用', owner: 'QA', accessKey: 'ak_client_supplied_bad', secretKey: 'sk_client_supplied_bad', status: 'active', apiIds: [api.id], createdAt: '2026-09-07' }
   r = await j(await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify(app) }))
-  ok('创建应用并授权', r.status === 200)
+  ok('创建应用并授权（服务端生成密钥）', r.status === 200 && r.body.accessKey?.startsWith('ak_') && r.body.secretKey?.startsWith('sk_') && r.body.accessKey !== 'ak_client_supplied_bad')
+  const ak = r.body.accessKey, sk = r.body.secretKey
+  const HK = { 'X-Access-Key': ak, 'X-Secret-Key': sk }
 
-  // 8. 网关真实调用（带 AccessKey）
-  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42?foo=bar`, { headers: { 'X-Access-Key': app.accessKey } }))
+  // 7b. 连通性测试 SSRF 防护：云元数据地址始终拦截
+  r = await j(await fetch(`${BASE}/admin/test`, { method: 'POST', headers: H, body: JSON.stringify({ url: 'http://169.254.169.254/latest/meta-data' }) }))
+  ok('SSRF 防护：云元数据地址拦截(403)', r.status === 403)
+
+  // 8. 网关真实调用（AccessKey + SecretKey 双因子）
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42?foo=bar`, { headers: HK }))
   ok('网关调用成功(200)', r.status === 200 && r.body?.data?.echo?.path?.includes('/upstream/echo/42'), `path=${r.body?.data?.echo?.path}`)
 
-  // 9. 无 AccessKey 应 401
+  // 9. 无密钥应 401；仅 AK 缺 SK 应 401；SK 错误应 401
   r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`))
   ok('无 AccessKey 拒绝(401)', r.status === 401)
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: { 'X-Access-Key': ak } }))
+  ok('缺少 SecretKey 拒绝(40102)', r.status === 401 && r.body?.code === 40102)
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: { 'X-Access-Key': ak, 'X-Secret-Key': 'sk_wrong' } }))
+  ok('错误 SecretKey 拒绝(40102)', r.status === 401 && r.body?.code === 40102)
 
-  // 10. 未授权应用的 AccessKey 应 403
-  await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ ...app, id: 'smoke-app-2', name: '未授权应用', accessKey: 'ak_smoke_noauth_00000', apiIds: [] }) })
-  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: { 'X-Access-Key': 'ak_smoke_noauth_00000' } }))
+  // 10. 未授权应用的密钥应 403
+  r = await j(await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ id: 'smoke-app-2', name: '未授权应用', owner: 'QA', status: 'active', apiIds: [], createdAt: '2026-09-07' }) }))
+  const app2 = r.body
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: { 'X-Access-Key': app2.accessKey, 'X-Secret-Key': app2.secretKey } }))
   ok('未授权应用拒绝(403)', r.status === 403)
 
   // 11. 错误方法应 405
-  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { method: 'POST', headers: { 'X-Access-Key': app.accessKey } }))
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { method: 'POST', headers: HK }))
   ok('方法不匹配拒绝(405)', r.status === 405)
 
-  // 12. 停用应用后调用应 401
-  await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ ...app, status: 'disabled' }) })
-  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: { 'X-Access-Key': app.accessKey } }))
+  // 12. 停用应用后调用应 401；启用中应用不允许重置 SK
+  r = await j(await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ ...app, accessKey: ak, secretKey: sk, resetSecret: true }) }))
+  ok('启用中应用重置 SK 被拒(409)', r.status === 409)
+  await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ ...app, accessKey: ak, secretKey: sk, status: 'disabled' }) })
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: HK }))
   ok('停用应用拒绝(401)', r.status === 401)
+
+  // 12b. 停用后重置 SK 成功，旧 SK 失效、新 SK 可用
+  r = await j(await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ ...app, accessKey: ak, secretKey: sk, status: 'disabled', resetSecret: true }) }))
+  const newSk = r.body?.secretKey
+  ok('停用后重置 SK 成功', r.status === 200 && newSk && newSk !== sk)
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: HK }))
+  ok('旧 SecretKey 立即失效(401)', r.status === 401)
+  await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ ...app, accessKey: ak, secretKey: newSk, status: 'active' }) })
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: { 'X-Access-Key': ak, 'X-Secret-Key': newSk } }))
+  ok('新 SecretKey 调用成功(200)', r.status === 200)
 
   // 13. 调用日志已落库
   r = await j(await fetch(`${BASE}/admin/logs?apiId=${api.id}`, { headers: H }))

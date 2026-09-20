@@ -24,9 +24,10 @@ test('管理员登录成功并渲染控制台首页', async ({ page }) => {
   await page.locator('#password').fill('Admin@123')
   await page.getByRole('button', { name: /登\s*录/ }).click()
 
-  // 跳转到控制台首页，概览标题出现
+  // 跳转到控制台首页，概览标题出现（初始密码未改时会叠加强制改密对话框，
+  // 模态框会把背景树标记 aria-hidden，故用文本而非 role 定位）
   await expect(page).not.toHaveURL(/\/login/)
-  await expect(page.getByRole('heading', { name: '平台概览' })).toBeVisible()
+  await expect(page.getByText('平台概览').first()).toBeVisible()
 
   // 侧边栏核心导航可见
   for (const item of ['应用与密钥', '系统管理']) {

@@ -153,7 +153,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     (action: Action): Promise<void> => {
       return syncToBackend(action)
         .then(() => {
-          if (action.type === 'reset') {
+          // upsertApp 的密钥由服务端生成/重置，本地必须回读服务端结果而非信任提交值
+          if (action.type === 'reset' || action.type === 'upsertApp') {
             load()
           } else {
             localDispatch(action)

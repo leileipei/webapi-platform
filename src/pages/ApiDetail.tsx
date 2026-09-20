@@ -150,10 +150,13 @@ export default function ApiDetail() {
       }
       body = JSON.stringify(obj)
     }
-    // 自动携带首个已授权应用的 AccessKey
+    // 自动携带首个已授权应用的 AccessKey + SecretKey（网关双因子校验）
     const app = boundApps.find((a) => a.status === 'active')
     const headers: Record<string, string> = {}
-    if (api.auth === 'apikey' && app) headers['X-Access-Key'] = app.accessKey
+    if (api.auth === 'apikey' && app && !app.secretKey.includes('****')) {
+      headers['X-Access-Key'] = app.accessKey
+      headers['X-Secret-Key'] = app.secretKey
+    }
     if (body) headers['Content-Type'] = 'application/json'
 
     const start = performance.now()
@@ -198,7 +201,7 @@ export default function ApiDetail() {
     ? state.apps.filter((app) => app.apiIds.includes(api.id) && app.status === 'active')
     : []
 
-  const curlCmd = `curl -X ${api.method} "https://gateway.example.com${api.path}" \\\n  -H "X-Access-Key: <YOUR_ACCESS_KEY>"${api.method !== 'GET' ? ' \\\n  -H "Content-Type: application/json" \\\n  -d \'{}\'' : ''}`
+  const curlCmd = `curl -X ${api.method} "https://gateway.example.com${api.path}" \\\n  -H "X-Access-Key: <YOUR_ACCESS_KEY>" \\\n  -H "X-Secret-Key: <YOUR_SECRET_KEY>"${api.method !== 'GET' ? ' \\\n  -H "Content-Type: application/json" \\\n  -d \'{}\'' : ''}`
 
   return (
     <div className="space-y-5 p-8">

@@ -26,12 +26,13 @@
 **后端**：Node.js 原生 `node:http` + `node:sqlite`（零第三方依赖，Node 20.17+ / 22.5+ 需 flag，推荐 Node 24），SQLite 文件持久化（`server/data.db`）
 
 - 管理 API（`/admin/*`）：API / 分组 / 应用 / 告警规则的增删改查、状态流转、指标聚合查询
-- **控制台登录认证**：账号密码登录（SHA-256 加盐哈希存储）、Bearer 会话令牌（12 小时过期）、连续 5 次失败锁定 5 分钟、修改密码后全会话失效；`/admin/*` 除登录外均需鉴权，数据面 `/gw/*` 不受影响仍用 AccessKey
-- **用户与角色（`/admin/users`）**：多用户 CRUD（仅管理员），viewer / operator / admin 三级接口级权限控制，角色或密码变更后该用户会话立即失效，禁止删除自己或唯一管理员
+- **控制台登录认证**：账号密码登录（**scrypt 加盐哈希**存储，旧 SHA-256 数据登录后自动升级）、Bearer 会话令牌（12 小时过期）、连续 5 次失败锁定 5 分钟、**初始密码首次登录强制修改**、修改密码后全会话失效；`/admin/*` 除登录外均需鉴权，数据面 `/gw/*` 不受影响仍用应用密钥
+- **安全加固**：全站安全响应头（CSP / X-Frame-Options / nosniff / Referrer-Policy）；管理接口 CORS 默认不下发（跨域需配置 `CORS_ORIGIN` 白名单）；请求体大小上限（网关默认 10MB，`GATEWAY_MAX_BODY` 可调）；连通性测试内置 SSRF 防护（云元数据 / 回环 / 链路本地地址拦截，`ALLOW_LOCAL_TEST=1` 可放行本机联调）
+- **用户与角色（`/admin/users`）**：多用户 CRUD（仅管理员），viewer / operator / admin 三级接口级权限控制，角色或密码变更后该用户会话立即失效，禁止删除自己或唯一管理员；**只读角色看到的 SecretKey 为脱敏掩码**
 - **日志归档（`/admin/archives`）**：`LOG_RETENTION_DAYS`（默认 30）天前的调用日志与操作审计日志分别自动导出为 `logs-archive-*.ndjson.gz` / `audit-archive-*.ndjson.gz` 并从库中删除；仅管理员可手动触发 / 列表 / 下载
 - **操作审计（`/admin/audit-logs`）**：登录、增删改、状态流转、归档等管理操作全量落库（操作人/角色/对象/详情/IP），仅管理员可查询，容量上限 5 万条自动修剪
 - **备份恢复（`/admin/backup`）**：`VACUUM INTO` 生成一致性快照供下载；上传备份文件事务内整体替换业务表（可选含用户表，恢复后注销全部会话），非法文件与缺表备份会被拒绝
-- 真实网关（`/gw/*`）：注册路径（含 `{param}` 占位符）匹配转发、API Key 鉴权与应用授权校验、QPS 限流、超时 / 失败重试、**熔断保护**（窗口内错误率超阈值自动开启）、调用指标落库、超阈值自动生成告警
+- 真实网关（`/gw/*`）：注册路径（含 `{param}` 占位符）匹配转发、**AccessKey + SecretKey 双因子鉴权**（密钥由服务端加密安全随机数生成，常量时间比较）与应用授权校验、QPS 限流、超时 / 失败重试、**熔断保护**（窗口内错误率超阈值自动开启）、调用指标落库、超阈值自动生成告警
 - 内置 mock 上游（`/upstream/*`）：echo 服务，支持 `?__fail=500` 与 `?__delay=ms` 故障注入，便于验证告警与熔断链路
 
 ## 本地启动
@@ -41,14 +42,14 @@ npm install
 npm run dev        # 一键同时启动后端(3100)与前端(3000)，支持 -- --port <N> 透传给 Vite
 ```
 
-初始管理员账号：**admin / Admin@123**（登录后请在左下角修改密码）。
+初始管理员账号：**admin / Admin@123**（首次登录将**强制修改初始密码**，请妥善保管新密码）。
 
 也可分开启动：`npm run server`（仅后端）、`npm run dev:web`（仅前端）。
 
-打开前端后，在「应用与密钥」复制任一启用中应用的 AccessKey，即可通过网关真实调用：
+打开前端后，在「应用与密钥」复制任一启用中应用的 AccessKey 与 SecretKey，即可通过网关真实调用：
 
 ```bash
-curl -H "X-Access-Key: <AccessKey>" http://localhost:3100/gw/api/v1/users/123
+curl -H "X-Access-Key: <AccessKey>" -H "X-Secret-Key: <SecretKey>" http://localhost:3100/gw/api/v1/users/123
 ```
 
 ## 构建与部署（局域网 / 服务器）
@@ -65,6 +66,11 @@ npm run server     # 启动一体化服务（默认绑定 0.0.0.0:3100）
 | `PORT` | `3100` | 后端监听端口 |
 | `HOST` | `0.0.0.0` | 监听网卡（默认允许局域网访问） |
 | `LOG_RETENTION_DAYS` | `30` | 调用日志保留天数，超期自动归档压缩 |
+| `CORS_ORIGIN` | 空 | 管理接口跨域白名单（逗号分隔，如 `https://a.com,https://b.com`）；默认不下发 CORS 头，同源部署无需配置 |
+| `GATEWAY_MAX_BODY` | `10485760` | 网关单请求体上限（字节），超限返回 413 |
+| `ALLOW_LOCAL_TEST` | 关 | 置 `1` 时连通性测试允许访问本机回环地址（仅本机联调使用；云元数据地址始终拦截） |
+
+> 公网部署安全基线：务必在前面加 Nginx/Caddy 终结 HTTPS；修改默认管理员密码（首次登录已强制）；按需配置 `CORS_ORIGIN`；不要开启 `ALLOW_LOCAL_TEST`。
 
 > 防火墙提示：若其他计算机无法访问，请确认服务器防火墙放行了对应端口（如 macOS 系统设置 → 网络 → 防火墙）。
 
@@ -86,7 +92,7 @@ npm run server     # 启动一体化服务（默认绑定 0.0.0.0:3100）
 本地回归（需先启动一个**测试实例**，e2e 会在其中创建 `smoke-*` 测试数据，请勿对生产实例运行）：
 
 ```bash
-npm run test:e2e   # 后端链路 16 项断言：注册→连通性测试→发布→授权→网关调用→安全管控(401/403/405/停用)→日志与审计落库
+npm run test:e2e   # 后端链路 23 项断言：注册→连通性测试（含 SSRF 拦截）→发布→授权→双因子网关调用→密钥重置管控→安全管控(401/403/405/停用)→日志与审计落库
 npm run test:ui    # Playwright UI 冒烟（首次运行需 npx playwright install chromium）
 ```
 

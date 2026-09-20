@@ -70,6 +70,8 @@ export interface AppCredential {
   status: 'active' | 'disabled'
   apiIds: string[]
   createdAt: string
+  /** 仅提交时使用的标记：true = 请求服务端重置 SecretKey（不落库） */
+  resetSecret?: boolean
 }
 
 export type AlertMetric = 'errorRate' | 'latency' | 'qps'

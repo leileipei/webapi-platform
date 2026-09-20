@@ -5,6 +5,7 @@ import type { MetricPoint } from '@/types'
 const TOKEN_KEY = 'webapi-admin-token'
 const USER_KEY = 'webapi-admin-user'
 const ROLE_KEY = 'webapi-admin-role'
+const MUST_CHANGE_KEY = 'webapi-admin-must-change-pwd'
 
 export type Role = 'viewer' | 'operator' | 'admin'
 
@@ -18,15 +19,19 @@ export const authStorage = {
   getToken: () => localStorage.getItem(TOKEN_KEY),
   getUser: () => localStorage.getItem(USER_KEY),
   getRole: (): Role => (localStorage.getItem(ROLE_KEY) as Role) || 'admin',
-  save: (token: string, username: string, role?: string) => {
+  /** 是否处于"必须修改初始密码"状态（登录响应下发，改密成功后随会话清理） */
+  getMustChange: () => localStorage.getItem(MUST_CHANGE_KEY) === '1',
+  save: (token: string, username: string, role?: string, mustChangePwd?: boolean) => {
     localStorage.setItem(TOKEN_KEY, token)
     localStorage.setItem(USER_KEY, username)
     localStorage.setItem(ROLE_KEY, role ?? 'admin')
+    localStorage.setItem(MUST_CHANGE_KEY, mustChangePwd ? '1' : '0')
   },
   clear: () => {
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
     localStorage.removeItem(ROLE_KEY)
+    localStorage.removeItem(MUST_CHANGE_KEY)
   },
 }
 

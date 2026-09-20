@@ -23,7 +23,10 @@ function defaultApi(groupId: string): Omit<ApiItem, 'id'> {
     version: 'v1.0.0', description: '', status: 'draft',
     backendUrl: '', timeout: 3000, retry: 1, qps: 500, auth: 'apikey',
     circuitBreaker: { enabled: true, errorRateThreshold: 50, windowSec: 30 },
-    queryParams: [], headers: [{ name: 'X-Access-Key', type: 'string', required: true, description: '应用访问密钥' }],
+    queryParams: [], headers: [
+      { name: 'X-Access-Key', type: 'string', required: true, description: '应用访问密钥（AccessKey）' },
+      { name: 'X-Secret-Key', type: 'string', required: true, description: '应用安全密钥（SecretKey），与 AccessKey 配对校验' },
+    ],
     bodyParams: [], responseExample: '{\n  "code": 0,\n  "message": "success",\n  "data": {}\n}',
     createdAt: new Date().toISOString().slice(0, 10),
     updatedAt: new Date().toISOString().slice(0, 10),

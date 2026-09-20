@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,12 +27,13 @@ export default function Login() {
     setLoading(true)
     setError('')
     try {
-      const r = await apiClient.post<{ token: string; username: string; role: string }>('/admin/auth/login', {
+      const r = await apiClient.post<{ token: string; username: string; role: string; mustChangePwd?: boolean }>('/admin/auth/login', {
         username: username.trim(),
         password,
       })
-      authStorage.save(r.token, r.username, r.role)
+      authStorage.save(r.token, r.username, r.role, r.mustChangePwd)
       reload()
+      if (r.mustChangePwd) toast.warning('首次登录：请先修改初始密码')
       navigate('/', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败')
