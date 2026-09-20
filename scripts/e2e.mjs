@@ -9,6 +9,8 @@
  * 请对测试实例运行，勿对生产数据运行。
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:3100'
+// 管理员口令可被环境变量覆盖（CI 冒烟步骤已完成强制改密时需传入新口令）
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'Admin@123'
 let pass = 0, fail = 0
 const ok = (name, cond, extra = '') => {
   cond ? pass++ : fail++
@@ -22,7 +24,7 @@ try {
   ok('健康检查 /healthz', r.status === 200 && r.body.ok === true)
 
   // 2. 管理员登录
-  r = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'Admin@123' }) }))
+  r = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: ADMIN_PASSWORD }) }))
   ok('管理员登录', r.status === 200 && !!r.body.token)
   if (!r.body?.token) throw new Error('登录失败，后续用例无法执行')
   let token = r.body.token
@@ -32,7 +34,7 @@ try {
     const blocked = await j(await fetch(`${BASE}/admin/apis`, { headers: { Authorization: `Bearer ${token}` } }))
     ok('初始密码状态管理接口被阻断(40310)', blocked.status === 403 && blocked.body?.code === 40310)
     const newPwd = `E2e!${Date.now()}x`
-    const cp = await j(await fetch(`${BASE}/admin/auth/password`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ oldPassword: 'Admin@123', newPassword: newPwd }) }))
+    const cp = await j(await fetch(`${BASE}/admin/auth/password`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ oldPassword: ADMIN_PASSWORD, newPassword: newPwd }) }))
     ok('强制改密完成', cp.status === 200)
     const relogin = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: newPwd }) }))
     ok('改密后重新登录', relogin.status === 200 && !!relogin.body.token && !relogin.body.mustChangePwd)

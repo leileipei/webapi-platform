@@ -54,13 +54,24 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"Admin@123"}' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).token))")
           [ -n "$token" ] || { echo "登录失败"; exit 1; }
+          # 初始密码状态下管理接口应被服务端阻断（403，错误码 40310）
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" http://localhost:3100/admin/state)
+          [ "$code" = "403" ] || { echo "初始密码状态期望 403，实际 $code"; exit 1; }
+          # 完成强制改密后重新登录
+          curl -sf -X POST http://localhost:3100/admin/auth/password \
+            -H "Content-Type: application/json" -H "Authorization: Bearer $token" \
+            -d '{"oldPassword":"Admin@123","newPassword":"Ci!Smoke#2026"}' > /dev/null || { echo "强制改密失败"; exit 1; }
+          token=$(curl -s -X POST http://localhost:3100/admin/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"Ci!Smoke#2026"}' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).token))")
+          [ -n "$token" ] || { echo "改密后登录失败"; exit 1; }
           # 带令牌访问应返回 200
           code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" http://localhost:3100/admin/state)
           [ "$code" = "200" ] || { echo "期望 200，实际 $code"; exit 1; }
           echo "后端冒烟测试通过"
 
       - name: 端到端回归（注册→发布→授权→网关调用→安全管控）
-        run: node scripts/e2e.mjs
+        run: E2E_ADMIN_PASSWORD='Ci!Smoke#2026' node scripts/e2e.mjs
 
       - name: 关闭后端
         if: always()
