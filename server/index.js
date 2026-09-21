@@ -2,7 +2,7 @@
 // 零第三方依赖：node:http + node:sqlite
 import http from 'node:http'
 import { existsSync, statSync, readFileSync } from 'node:fs'
-import { dirname, extname, join, normalize } from 'node:path'
+import { dirname, extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
@@ -79,8 +79,8 @@ function serveStatic(req, res, url) {
     return res.end('前端尚未构建：请先执行 npm run build，或开发模式使用 npm run dev')
   }
   let filePath = normalize(join(DIST_DIR, decodeURIComponent(url.pathname)))
-  // 防目录穿越（比较时补路径分隔符，避免 /dist-evil 型前缀绕过）
-  if (filePath !== DIST_DIR && !filePath.startsWith(DIST_DIR + '/')) {
+  // 防目录穿越（比较时补路径分隔符，避免 /dist-evil 型前缀绕过；Windows 下分隔符为 \，必须用 sep 否则全部误拦截）
+  if (filePath !== DIST_DIR && !filePath.startsWith(DIST_DIR + sep)) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURE_HEADERS })
     return res.end('forbidden')
   }
