@@ -116,6 +116,8 @@ try {
   ok('非法请求方法被拒(400)', r.status === 400)
   r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-x2', path: '/api/v1/smoke-x2', auth: 'oauth2' }) }))
   ok('未实现认证方式被拒(400)', r.status === 400)
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-x4', path: '/api/v1/smoke-x4', protocol: 'WebSocket' }) }))
+  ok('WebSocket 协议注册被拒(400)', r.status === 400, `status=${r.status} ${r.body?.message ?? ''}`)
   r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-x3', path: '/api/v1/smoke-x3', groupId: 'no-such-group' }) }))
   ok('悬空分组引用被拒(400)', r.status === 400)
 

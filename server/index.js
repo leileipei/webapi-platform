@@ -321,6 +321,8 @@ function validateApiDef(obj) {
   if (!/^\/[\w\-/{}]*$/.test(p)) return '请求路径含非法字符（支持字母、数字、-、_、/ 与 {param} 占位符）'
   if ((p.match(/\{/g) ?? []).length !== (p.match(/\}/g) ?? []).length) return '路径占位符 {param} 大括号不配对'
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(String(obj.version ?? 'v1'))) return '版本号格式不合法'
+  // 网关数据面仅实现 HTTP/HTTPS 转发，WebSocket 注册后无法被代理，直接拒绝（前端已置灰，此处堵服务端绕过口子）
+  if (!['HTTP', 'HTTPS'].includes(obj.protocol ?? 'HTTP')) return '当前仅支持 HTTP / HTTPS 协议，WebSocket 网关转发尚未实现'
   // oauth2/jwt 网关在数据面尚未实现拦截逻辑，允许注册会造成"看似有鉴权实则裸奔"，直接拒绝
   if (!['none', 'apikey'].includes(obj.auth)) return '认证方式仅支持 none / apikey（oauth2、jwt 暂未实现，注册后网关将无法正确拦截）'
   if (!Number.isInteger(obj.timeout) || obj.timeout < 100 || obj.timeout > 60000) return '超时需为 100~60000 毫秒的整数'
