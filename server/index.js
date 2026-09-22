@@ -5,6 +5,7 @@ import { existsSync, statSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { lookup } from 'node:dns/promises'
 import { db, store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics, addAudit, queryAudit, createBackup, restoreFrom, backupStream, fileSize, removeFile } from './db.js'
 import { ensureAdmin, login, verify, logout, changePassword, hasRole, listUsers, upsertUser, deleteUser, revokeAllSessions } from './auth.js'
@@ -391,9 +392,13 @@ async function forward(api, params, req, body, url) {
         signal: AbortSignal.timeout(api.timeout || 3000),
         redirect: 'manual',
       })
-      const respBody = Buffer.from(await upstream.arrayBuffer())
-      if (upstream.status >= 500 && i < attempts - 1) continue // 5xx 触发重试
-      return { status: upstream.status, body: respBody, contentType: upstream.headers.get('content-type') ?? 'application/json' }
+      if (upstream.status >= 500 && i < attempts - 1) {
+        await upstream.body?.cancel().catch(() => {}) // 丢弃本次响应体后立即重试
+        continue
+      }
+      // 响应体流式返回（不读入内存），由调用方 pipe 给客户端：大文件下载不再整报文缓冲
+      const stream = upstream.body ? Readable.fromWeb(upstream.body) : Readable.from([])
+      return { status: upstream.status, stream, contentType: upstream.headers.get('content-type') ?? 'application/json' }
     } catch (err) {
       lastErr = err
       if (i < attempts - 1) continue
@@ -477,7 +482,7 @@ async function handleGateway(req, res, url) {
   try {
     const result = await forward(api, params, req, body, url)
     ok = result.status < 500
-    const latency = performance.now() - start
+    const latency = performance.now() - start // 流式模式下为 TTFB（首字节时间）
     pushRecent(api.id, ok, latency)
     recordMetric(api.id, ok, latency)
     evaluateAlerts(api.id)
@@ -488,7 +493,9 @@ async function handleGateway(req, res, url) {
       'Access-Control-Allow-Origin': '*',
       'X-Gateway-Latency': String(Math.round(latency)),
     })
-    res.end(result.body)
+    // 上游响应体流式透传给客户端（背压由 pipe 处理）；中途上游断流时销毁连接，客户端收到截断响应
+    result.stream.on('error', () => res.destroy())
+    result.stream.pipe(res)
   } catch (err) {
     ok = false
     const latency = performance.now() - start
