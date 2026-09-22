@@ -112,6 +112,10 @@ function serveStatic(req, res, url) {
 /* ---------- 运行时状态（内存） ---------- */
 // AccessKey 索引：ak -> app 快照，避免网关每请求全量解析应用表；应用增删改/备份恢复/重置演示数据时失效重建
 let akIndex = null
+// 路由缓存：apis 表内存快照，避免网关每请求全量读取 + JSON 解析全部 API；
+// API 增删改、备份恢复、重置演示数据时置 null 重建
+let apisCache = null
+const getApisCached = () => (apisCache ??= store.list('apis'))
 function getAppByAk(ak) {
   if (!akIndex) {
     akIndex = new Map()
@@ -340,13 +344,40 @@ function validateApiDef(obj) {
   return null
 }
 
-/** 网关入参校验：必填 Query 参数缺失 / number、boolean 类型不符时拒绝调用（在鉴权之后执行，防止未授权方探测参数结构） */
-function validateCallParams(api, url) {
+/** 网关入参校验：必填 Query/Header 缺失、number/boolean 类型不符时拒绝调用（在鉴权之后执行，防止未授权方探测参数结构） */
+function validateCallParams(api, url, req) {
   for (const qp of api.queryParams ?? []) {
     const v = url.searchParams.get(qp.name)
     if (qp.required && (v === null || v === '')) return `缺少必填 Query 参数「${qp.name}」`
     if (v !== null && qp.type === 'number' && !/^-?\d+(\.\d+)?$/.test(v)) return `Query 参数「${qp.name}」需为数字`
     if (v !== null && qp.type === 'boolean' && !['true', 'false'].includes(v)) return `Query 参数「${qp.name}」需为布尔值（true/false）`
+  }
+  for (const hd of api.headers ?? []) {
+    const v = req.headers[String(hd.name).toLowerCase()]
+    if (hd.required && (v === undefined || v === '')) return `缺少必填请求头「${hd.name}」`
+  }
+  return null
+}
+
+/** Body 参数校验（声明了 bodyParams 的非 GET/HEAD 接口）：请求体须为 JSON 对象，逐字段校验必填与类型 */
+function validateBodyParams(api, body) {
+  const defs = api.bodyParams ?? []
+  if (defs.length === 0 || ['GET', 'HEAD'].includes(api.method)) return null
+  let obj
+  try {
+    obj = body.length > 0 ? JSON.parse(body.toString('utf-8')) : null
+  } catch {
+    return '请求体不是合法的 JSON'
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '请求体需为 JSON 对象'
+  for (const bp of defs) {
+    const v = obj[bp.name]
+    if (v === undefined || v === null) {
+      if (bp.required) return `缺少必填 Body 参数「${bp.name}」`
+      continue
+    }
+    const actual = Array.isArray(v) ? 'array' : typeof v
+    if (actual !== bp.type) return `Body 参数「${bp.name}」类型需为 ${bp.type}（实际为 ${actual}）`
   }
   return null
 }
@@ -493,9 +524,13 @@ async function forward(api, params, req, body, url) {
         await upstream.body?.cancel().catch(() => {}) // 丢弃本次响应体后立即重试
         continue
       }
+      // 响应头透传：剔除 hop-by-hop 与平台自管头，其余（如 Cache-Control、Content-Disposition、自定义业务头）原样带回
+      const respHeaders = {}
+      const SKIP_RESP = new Set(['connection', 'transfer-encoding', 'keep-alive', 'content-length', 'upgrade', 'trailer', 'te', 'access-control-allow-origin', 'access-control-allow-methods', 'access-control-allow-headers'])
+      upstream.headers.forEach((v, k) => { if (!SKIP_RESP.has(k)) respHeaders[k] = v })
       // 响应体流式返回（不读入内存），由调用方 pipe 给客户端：大文件下载不再整报文缓冲
       const stream = upstream.body ? Readable.fromWeb(upstream.body) : Readable.from([])
-      return { status: upstream.status, stream, contentType: upstream.headers.get('content-type') ?? 'application/json' }
+      return { status: upstream.status, stream, contentType: upstream.headers.get('content-type') ?? 'application/json', headers: respHeaders }
     } catch (err) {
       lastErr = err
       if (i < attempts - 1) continue
@@ -507,7 +542,7 @@ async function forward(api, params, req, body, url) {
 async function handleGateway(req, res, url) {
   const start = performance.now()
   const reqPath = decodeURIComponent(url.pathname.slice(3)) // 去掉 /gw 前缀
-  const apis = store.list('apis')
+  const apis = getApisCached()
   const matched = matchApi(apis, req.method, reqPath)
 
   // 审计日志：网关所有出入请求（含被拒绝的）都落库
@@ -558,8 +593,8 @@ async function handleGateway(req, res, url) {
     }
   }
 
-  // 入参 Schema 校验（必填/类型），在鉴权之后执行
-  const paramErr = validateCallParams(api, url)
+  // 入参 Schema 校验（Query/Header 必填与类型），在鉴权之后执行
+  const paramErr = validateCallParams(api, url, req)
   if (paramErr) {
     writeLog(400, { appName: log.appName, message: paramErr })
     return json(res, 400, { code: 40001, message: paramErr }, '*')
@@ -582,23 +617,42 @@ async function handleGateway(req, res, url) {
     writeLog(413, { message: `请求体超过上限 ${GW_MAX_BODY} 字节` })
     return json(res, 413, { code: 41300, message: '请求体过大' }, '*')
   }
+  // Body 参数 Schema 校验（声明了 bodyParams 的接口）
+  const bodyErr = validateBodyParams(api, body)
+  if (bodyErr) {
+    writeLog(400, { appName: log.appName, message: bodyErr })
+    return json(res, 400, { code: 40001, message: bodyErr }, '*')
+  }
   let ok = true
   try {
     const result = await forward(api, params, req, body, url)
-    ok = result.status < 500
-    const latency = performance.now() - start // 流式模式下为 TTFB（首字节时间）
-    pushRecent(api.id, ok, latency)
-    recordMetric(api.id, ok, latency)
-    evaluateAlerts(api.id)
-    updateCircuitBreaker(api)
-    writeLog(result.status, ok ? {} : { message: `上游返回 ${result.status}` })
+    const ttfb = performance.now() - start
+    // 指标/日志延迟到流式传输真正完成后记录：latency 为全程耗时（而非 TTFB），
+    // 中途断流会被正确记为失败而不是"提前记成功"
+    let settled = false
+    const settle = (streamOk, message) => {
+      if (settled) return
+      settled = true
+      ok = streamOk && result.status < 500
+      const latency = performance.now() - start
+      pushRecent(api.id, ok, latency)
+      recordMetric(api.id, ok, latency)
+      evaluateAlerts(api.id)
+      updateCircuitBreaker(api)
+      writeLog(result.status, message ? { message } : ok ? {} : { message: `上游返回 ${result.status}` })
+    }
     res.writeHead(result.status, {
-      'Content-Type': result.contentType,
+      ...result.headers, // 上游响应头透传（hop-by-hop 已在 forward 中剔除）
       'Access-Control-Allow-Origin': '*',
-      'X-Gateway-Latency': String(Math.round(latency)),
+      'X-Gateway-Latency': String(Math.round(ttfb)), // 首字节时间，供调用方观察网关开销
     })
-    // 上游响应体流式透传给客户端（背压由 pipe 处理）；中途上游断流时销毁连接，客户端收到截断响应
-    result.stream.on('error', () => res.destroy())
+    // 上游响应体流式透传给客户端（背压由 pipe 处理）
+    result.stream.on('end', () => settle(true))
+    result.stream.on('error', () => { settle(false, '上游响应流中断'); res.destroy() })
+    // 客户端提前断开：中止上游读取，不计为上游失败（避免误触熔断），但日志留痕
+    res.on('close', () => {
+      if (!settled) { result.stream.destroy(); settle(result.status < 500, '客户端提前断开连接') }
+    })
     result.stream.pipe(res)
   } catch (err) {
     ok = false
@@ -820,6 +874,7 @@ async function handleAdmin(req, res, url) {
       cbWindows.clear()
       cbOpenUntil.clear()
       akIndex = null
+      apisCache = null
       rateBuckets.clear()
       // 恢复后审计表已被备份内容替换，追加本次恢复记录
       audit('恢复备份', null, `恢复 ${r.tables} 张数据表${includeUsers ? '（含用户账号，全部会话已注销）' : ''}`)
@@ -860,6 +915,7 @@ async function handleAdmin(req, res, url) {
       cbOpenUntil.clear()
       rateBuckets.clear()
       akIndex = null
+      apisCache = null
       audit('重置演示数据')
       return j( 200, { ok: true })
     }
@@ -938,6 +994,7 @@ async function handleAdmin(req, res, url) {
       api.status = status
       api.updatedAt = new Date().toISOString().slice(0, 10)
       store.upsert('apis', api)
+      apisCache = null // 状态变化影响网关可用性，重建路由缓存
       audit('API 状态流转', api.name, `${api.method} ${api.path} → ${status}`)
       return j( 200, api)
     }
@@ -999,6 +1056,7 @@ async function handleAdmin(req, res, url) {
       }
       store.upsert(kind, obj)
       if (kind === 'apps') akIndex = null // 应用变更后重建 AccessKey 索引
+      if (kind === 'apis') apisCache = null // API 变更后重建路由缓存
       const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
       audit(`${isNew ? '新建' : '更新'}${kindLabel}`, obj.name ?? obj.id)
       const resp = { ...obj }
@@ -1023,6 +1081,7 @@ async function handleAdmin(req, res, url) {
       }
       store.remove(kind, id)
       if (kind === 'apps') akIndex = null // 应用删除后重建 AccessKey 索引
+      if (kind === 'apis') apisCache = null // API 删除后重建路由缓存
       const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
       audit(`删除${kindLabel}`, existed?.name ?? id)
       if (kind === 'apis') {

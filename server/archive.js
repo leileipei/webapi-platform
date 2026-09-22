@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { db } from './db.js'
+import { db, flushWrites } from './db.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 export const ARCHIVE_DIR = join(__dirname, 'archives')
@@ -34,6 +34,7 @@ async function exportOldRows(table, filePrefix) {
 
 /** 执行一次归档：超期的调用日志与操作审计日志分别压缩导出后从库中删除 */
 export async function runArchive() {
+  flushWrites() // 先把队列中的日志落库，避免漏归档
   const logs = await exportOldRows('logs', 'logs-archive')
   const audits = await exportOldRows('audit_logs', 'audit-archive')
   return {

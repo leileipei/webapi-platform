@@ -57,6 +57,7 @@ try {
     const cp = await j(await fetch(`${BASE}/admin/auth/password`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ oldPassword: ADMIN_PASSWORD_USED, newPassword: newPwd }) }))
     ok('强制改密完成', cp.status === 200)
     savePwd(newPwd)
+    ADMIN_PASSWORD_USED = newPwd
     const relogin = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: newPwd }) }))
     ok('改密后重新登录', relogin.status === 200 && !!relogin.body.token && !relogin.body.mustChangePwd)
     if (!relogin.body?.token) throw new Error('改密后登录失败')
@@ -73,7 +74,7 @@ try {
     await fetch(`${BASE}/admin/apps/${appId}`, { method: 'DELETE', headers: H }).catch(() => {})
   }
   await fetch(`${BASE}/admin/groups/smoke-group-1`, { method: 'DELETE', headers: H }).catch(() => {})
-  for (const apiId of ['smoke-api-1', 'smoke-param', 'smoke-static', 'smoke-api-shadow']) {
+  for (const apiId of ['smoke-api-1', 'smoke-param', 'smoke-static', 'smoke-api-shadow', 'smoke-body']) {
     await fetch(`${BASE}/admin/apis/${apiId}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'offline' }) }).catch(() => {})
     await fetch(`${BASE}/admin/apis/${apiId}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }).catch(() => {})
     await fetch(`${BASE}/admin/apis/${apiId}`, { method: 'DELETE', headers: H }).catch(() => {})
@@ -160,6 +161,24 @@ try {
   // 无密钥调用参数路由：返回 401 说明仍正常命中路由（鉴权拒绝），而非 404 路由丢失
   ok('参数路由仍可正常匹配(401 鉴权而非 404)', r.status === 401)
 
+  // 6e. Schema 校验补齐：必填请求头缺失 / Body 参数必填与类型
+  const bodyApi = { id: 'smoke-body', name: 'Body校验测试', method: 'POST', path: '/api/v1/body-check', backendUrl: `${BASE}/upstream/echo`, groupId: null, status: 'draft', auth: 'none', qps: 100, timeout: 3000, retry: 0, circuitBreaker: { enabled: false }, headers: [{ name: 'X-Tenant', type: 'string', required: true, description: '租户标识' }], bodyParams: [{ name: 'count', type: 'number', required: true, description: '数量' }, { name: 'tags', type: 'array', required: false, description: '标签' }], createdAt: '2026-09-07', updatedAt: '2026-09-07' }
+  await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify(bodyApi) }))
+  await j(await fetch(`${BASE}/admin/apis/smoke-body/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'published' }) }))
+  r = await j(await fetch(`${BASE}/gw/api/v1/body-check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) }))
+  ok('缺少必填请求头被拒(400)', r.status === 400 && r.body?.code === 40001, `status=${r.status} ${r.body?.message ?? ''}`)
+  r = await j(await fetch(`${BASE}/gw/api/v1/body-check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tenant': 't1' }, body: JSON.stringify({}) }))
+  ok('缺少必填 Body 参数被拒(400)', r.status === 400 && r.body?.code === 40001)
+  r = await j(await fetch(`${BASE}/gw/api/v1/body-check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tenant': 't1' }, body: JSON.stringify({ count: 'abc' }) }))
+  ok('Body 参数类型错误被拒(400)', r.status === 400 && r.body?.code === 40001)
+  r = await j(await fetch(`${BASE}/gw/api/v1/body-check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tenant': 't1' }, body: JSON.stringify({ count: 2, tags: ['a'] }) }))
+  ok('合法 Header+Body 调用成功(200)', r.status === 200, `status=${r.status} ${r.body?.message ?? ''}`)
+
+  // 6f. 流式透传：响应保留上游 Content-Type 且带网关延迟头
+  const rRaw = await fetch(`${BASE}/gw/api/v1/param-check?n=42`)
+  await rRaw.arrayBuffer()
+  ok('流式响应头透传(Content-Type + X-Gateway-Latency)', (rRaw.headers.get('content-type') ?? '').includes('application/json') && rRaw.headers.get('x-gateway-latency') !== null)
+
   // 7. 创建应用并授权（密钥由服务端生成，不信任客户端提交值）
   const app = { id: 'smoke-app-1', name: '冒烟测试应用', owner: 'QA', accessKey: 'ak_client_supplied_bad', secretKey: 'sk_client_supplied_bad', status: 'active', apiIds: [api.id], createdAt: '2026-09-07' }
   r = await j(await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify(app) }))
@@ -235,6 +254,14 @@ try {
   // 14. 操作审计已记录
   r = await j(await fetch(`${BASE}/admin/audit-logs?keyword=冒烟`, { headers: H }))
   ok('操作审计已记录', r.status === 200 && (r.body.total ?? 0) >= 2, `total=${r.body.total}`)
+
+  // 15. 退出登录后令牌立即失效（持久化黑名单，重启亦不恢复）
+  const s2 = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: ADMIN_PASSWORD_USED }) }))
+  const t2 = s2.body?.token
+  ok('第二会话登录', !!t2)
+  await j(await fetch(`${BASE}/admin/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${t2}` } }))
+  r = await j(await fetch(`${BASE}/admin/state`, { headers: { Authorization: `Bearer ${t2}` } }))
+  ok('注销后令牌立即失效(401)', r.status === 401)
 } catch (err) {
   fail++
   console.error(`❌ 执行异常：${err?.message ?? err}`)

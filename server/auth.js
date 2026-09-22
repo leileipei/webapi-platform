@@ -28,6 +28,8 @@ try {
 }
 // 服务端私有键值存储（令牌签名密钥、全局令牌纪元）
 db.exec(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)`)
+// 注销令牌黑名单（持久化，重启不丢失）：存令牌哈希与过期时间，定期清理过期项
+db.exec(`CREATE TABLE IF NOT EXISTS revoked_tokens (token_hash TEXT PRIMARY KEY, exp INTEGER NOT NULL)`)
 
 const SESSION_TTL = 12 * 3600 * 1000 // 12 小时
 const MAX_ATTEMPTS = 5
@@ -38,8 +40,12 @@ export const ROLE_LEVEL = { viewer: 0, operator: 1, admin: 2 }
 
 // username -> { count, lockUntil }
 const loginAttempts = new Map()
-// 注销名单（仅内存；令牌本身 12h 过期，重启后名单清零属可接受范围）
-const revokedTokens = new Set()
+// 注销名单持久化（SQLite）：重启后已注销令牌仍然失效，直到其自然过期
+const tokenHash = (t) => createHash('sha256').update(t).digest('hex')
+const revokedGet = db.prepare('SELECT token_hash FROM revoked_tokens WHERE token_hash = ? AND exp > ?')
+const revokedAdd = db.prepare('INSERT OR IGNORE INTO revoked_tokens (token_hash, exp) VALUES (?, ?)')
+const revokedPurge = db.prepare('DELETE FROM revoked_tokens WHERE exp <= ?')
+const isRevoked = (token) => !!revokedGet.get(tokenHash(token), Date.now())
 
 const kvGet = (k) => db.prepare('SELECT v FROM kv WHERE k = ?').get(k)?.v
 const kvSet = (k, v) =>
@@ -143,7 +149,7 @@ export function login(username, password) {
 export function verify(req) {
   const h = req.headers.authorization
   const token = h && h.startsWith('Bearer ') ? h.slice(7) : null
-  if (!token || revokedTokens.has(token)) return null
+  if (!token) return null
   const dot = token.lastIndexOf('.')
   if (dot <= 0) return null
   const payload = token.slice(0, dot)
@@ -160,14 +166,23 @@ export function verify(req) {
   }
   if (!data?.u || typeof data.exp !== 'number' || data.exp < Date.now()) return null
   if (data.e !== tokenEpoch) return null
+  if (isRevoked(token)) return null // 注销名单（持久化）
   const row = db.prepare('SELECT role, token_ver FROM users WHERE username = ?').get(data.u)
   if (!row || row.token_ver !== data.v) return null
   return { username: data.u, role: row.role, token }
 }
 
-/** 注销单个令牌（退出登录） */
+/** 注销单个令牌（退出登录）：写入持久化黑名单，重启后仍失效；顺带清理已自然过期的条目 */
 export function logout(token) {
-  if (token) revokedTokens.add(token)
+  if (!token) return
+  let exp = Date.now() + SESSION_TTL // 解析失败时按完整有效期兜底
+  try {
+    const payload = token.slice(0, token.lastIndexOf('.'))
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'))
+    if (typeof data.exp === 'number') exp = data.exp
+  } catch { /* 非法令牌也照常入黑名单 */ }
+  revokedAdd.run(tokenHash(token), exp)
+  revokedPurge.run(Date.now())
 }
 
 /** 会话角色是否满足最低要求 */

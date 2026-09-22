@@ -90,32 +90,67 @@ export const store = {
 
 /** 记录一次网关调用 */
 export function recordMetric(apiId, ok, latencyMs) {
-  const date = new Date().toISOString().slice(0, 10)
-  db.prepare(`
-    INSERT INTO metrics (api_id, date, calls, errors, latency_sum)
-    VALUES (?, ?, 1, ?, ?)
-    ON CONFLICT(api_id, date) DO UPDATE SET
-      calls = calls + 1,
-      errors = errors + excluded.errors,
-      latency_sum = latency_sum + excluded.latency_sum
-  `).run(apiId, date, ok ? 0 : 1, Math.round(latencyMs))
+  metricQueue.push({ apiId, ok: ok ? 1 : 0, latencyMs: Math.round(latencyMs) })
 }
+
+const metricInsertStmt = db.prepare(`
+  INSERT INTO metrics (api_id, date, calls, errors, latency_sum)
+  VALUES (?, ?, 1, ?, ?)
+  ON CONFLICT(api_id, date) DO UPDATE SET
+    calls = calls + 1,
+    errors = errors + excluded.errors,
+    latency_sum = latency_sum + excluded.latency_sum
+`)
 
 const MAX_LOGS = 20000
 
-/** 记录一条调用日志（含被网关拒绝的请求），超容量时修剪最旧记录 */
+/** 记录一条调用日志（含被网关拒绝的请求）：进入异步队列，批量落库 */
 export function addLog(entry) {
-  db.prepare(
-    'INSERT INTO logs (ts, api_id, api_name, app_name, method, path, status, latency, ip, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(
-    new Date().toISOString().replace('T', ' ').slice(0, 19),
-    entry.apiId ?? null, entry.apiName ?? null, entry.appName ?? null,
-    entry.method, entry.path, entry.status, Math.round(entry.latency ?? 0), entry.ip ?? null, entry.message ?? null,
-  )
-  const count = db.prepare('SELECT COUNT(*) c FROM logs').get().c
-  if (count > MAX_LOGS) {
-    db.prepare('DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id ASC LIMIT ?)').run(count - MAX_LOGS)
+  logQueue.push({
+    ts: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    apiId: entry.apiId ?? null, apiName: entry.apiName ?? null, appName: entry.appName ?? null,
+    method: entry.method, path: entry.path, status: entry.status,
+    latency: Math.round(entry.latency ?? 0), ip: entry.ip ?? null, message: entry.message ?? null,
+  })
+}
+
+/* ---------- 数据面写库异步化 ----------
+ * 网关每请求的指标/日志写入是同步 SQLite 操作，会阻塞事件循环上的其他请求。
+ * 这里改为内存队列 + 每 250ms 事务批量落库；读路径（query*）开头先 flush，
+ * 保证"写完即可读"（read-your-writes），看板与告警评估不受影响。 */
+const metricQueue = []
+const logQueue = []
+const logInsertStmt = db.prepare(
+  'INSERT INTO logs (ts, api_id, api_name, app_name, method, path, status, latency, ip, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+)
+
+export function flushWrites() {
+  if (metricQueue.length === 0 && logQueue.length === 0) return
+  const metrics = metricQueue.splice(0)
+  const logs = logQueue.splice(0)
+  db.exec('BEGIN')
+  try {
+    const date = new Date().toISOString().slice(0, 10)
+    for (const m of metrics) metricInsertStmt.run(m.apiId, date, m.ok ? 0 : 1, m.latencyMs)
+    for (const l of logs) logInsertStmt.run(l.ts, l.apiId, l.apiName, l.appName, l.method, l.path, l.status, l.latency, l.ip, l.message)
+    // 容量修剪放在批量事务内，每次 flush 至多检查一次
+    if (logs.length > 0) {
+      const count = db.prepare('SELECT COUNT(*) c FROM logs').get().c
+      if (count > MAX_LOGS) {
+        db.prepare('DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id ASC LIMIT ?)').run(count - MAX_LOGS)
+      }
+    }
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    console.error('[db] 批量写库失败:', err?.message ?? err)
   }
+}
+
+// 定时批量落库（250ms）；进程退出前兜底 flush，避免停服丢失最后一段日志
+setInterval(flushWrites, 250).unref()
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { flushWrites(); process.exit(0) })
 }
 
 const MAX_AUDIT_LOGS = 50000
@@ -150,6 +185,7 @@ export function queryAudit({ username, keyword, page = 1, pageSize = 20 }) {
 
 /** 分页查询调用日志 */
 export function queryLogs({ apiId, statusClass, appName, keyword, page = 1, pageSize = 20 }) {
+  flushWrites() // 先落库队列中的新日志，保证读到自己刚写的数据
   const where = []
   const args = []
   if (apiId) { where.push('api_id = ?'); args.push(apiId) }
@@ -168,6 +204,7 @@ export function queryLogs({ apiId, statusClass, appName, keyword, page = 1, page
 
 /** 近 N 分钟分钟级流量聚合（基于日志表，含被拒绝请求；返回 UTC 分钟串，前端转本地时区） */
 export function queryMinuteMetrics(minutes = 60, apiId) {
+  flushWrites()
   const since = new Date(Date.now() - minutes * 60000).toISOString().replace('T', ' ').slice(0, 16)
   const whereApi = apiId ? 'AND api_id = ?' : ''
   const args = apiId ? [since, apiId] : [since]
@@ -202,6 +239,7 @@ export function queryMinuteMetrics(minutes = 60, apiId) {
 
 /** 查询指标：apiId 为空时汇总所有已发布 API */
 export function queryMetrics(apiId, days = 30) {
+  flushWrites()
   const since = new Date()
   since.setDate(since.getDate() - (days - 1))
   const sinceStr = since.toISOString().slice(0, 10)
@@ -240,6 +278,7 @@ export function queryMetrics(apiId, days = 30) {
 
 /** 每个 API 的今日调用量与近 30 天总量（列表/看板用） */
 export function apiCallStats() {
+  flushWrites()
   const today = new Date().toISOString().slice(0, 10)
   const since = new Date()
   since.setDate(since.getDate() - 29)
@@ -273,6 +312,7 @@ const BUSINESS_TABLES = ['apis', 'groups_', 'apps', 'rules', 'alerts', 'metrics'
 
 /** 生成一致性备份文件（VACUUM INTO），返回临时文件路径，调用方流式发送后需自行删除 */
 export function createBackup() {
+  flushWrites() // 先落库队列中的日志/指标，保证备份快照包含最新数据
   const tmpPath = join(__dirname, `backup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.db`)
   // VACUUM INTO 不支持绑定参数，路径为本函数内部生成，转义后内联
   db.exec(`VACUUM INTO '${tmpPath.replaceAll("'", "''")}'`)

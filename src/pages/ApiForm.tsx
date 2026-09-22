@@ -332,7 +332,8 @@ export default function ApiForm() {
               <Select value={form.protocol} onValueChange={(v) => set('protocol', v as Protocol)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {['HTTP', 'HTTPS', 'WebSocket'].map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                  {['HTTP', 'HTTPS'].map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                  <SelectItem value="WebSocket" disabled>WebSocket（网关暂未支持）</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -441,8 +442,8 @@ export default function ApiForm() {
             <SelectContent>
               <SelectItem value="none">无鉴权（公开接口）</SelectItem>
               <SelectItem value="apikey">API Key（AccessKey + SecretKey 签名）</SelectItem>
-              <SelectItem value="oauth2">OAuth 2.0</SelectItem>
-              <SelectItem value="jwt">JWT</SelectItem>
+              <SelectItem value="oauth2" disabled>OAuth 2.0（暂未实现）</SelectItem>
+              <SelectItem value="jwt" disabled>JWT（暂未实现）</SelectItem>
             </SelectContent>
           </Select>
           <p className="pt-1 text-xs text-slate-500">
