@@ -11,6 +11,9 @@ const DB_PATH = join(__dirname, 'data.db')
 mkdirSync(__dirname, { recursive: true })
 
 export const db = new DatabaseSync(DB_PATH)
+// WAL 模式：读写不互斥，降低并发调用下的锁等待；synchronous=NORMAL 在 WAL 下兼顾性能与持久性
+db.exec('PRAGMA journal_mode = WAL')
+db.exec('PRAGMA synchronous = NORMAL')
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS apis    (id TEXT PRIMARY KEY, data TEXT NOT NULL);

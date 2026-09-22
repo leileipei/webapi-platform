@@ -102,7 +102,7 @@ function serveStatic(req, res, url) {
   const isHtml = extname(filePath).toLowerCase() === '.html'
   res.writeHead(200, {
     'Content-Type': MIME[extname(filePath).toLowerCase()] ?? 'application/octet-stream',
-    'Cache-Control': filePath.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'Cache-Control': filePath.includes(`${sep}assets${sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache',
     ...SECURE_HEADERS,
     ...(isHtml ? { 'Content-Security-Policy': CSP } : {}),
   })
@@ -1033,6 +1033,7 @@ async function handleAdmin(req, res, url) {
             store.upsert('apps', app)
           }
         }
+        akIndex = null // 授权关系已变化，重建 AccessKey 索引快照
       }
       return j( 200, { ok: true })
     }
