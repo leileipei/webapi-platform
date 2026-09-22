@@ -9,3 +9,4 @@ playwright-report/
 
 # Office 临时锁文件
 ~$*.docx
+scripts/.e2e-admin-pwd.json

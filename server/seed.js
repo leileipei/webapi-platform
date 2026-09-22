@@ -1,6 +1,6 @@
 // 内置示例数据 —— 首次启动时写入 SQLite
 // 后端地址指向内置 mock 上游（/upstream/*），保证示例 API 可真实调通
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 
 function daysAgo(n) {
   const d = new Date()
@@ -159,19 +159,16 @@ function randomKey(prefix, len) {
 
 export function seedApps(apis) {
   const published = apis.filter((a) => a.status === 'published')
+  // v1.4.0 起 SK 只存哈希，演示数据同样不落明文
+  const demo = (id, name, owner, status, apiIds, createdAt) => ({
+    id, name, owner, accessKey: randomKey('ak', 16),
+    secretKeyHash: createHash('sha256').update(randomKey('sk', 32)).digest('hex'),
+    status, apiIds, createdAt,
+  })
   return [
-    {
-      id: 'app-mall', name: '商城 App', owner: '前端一组', accessKey: randomKey('ak', 16), secretKey: randomKey('sk', 32),
-      status: 'active', apiIds: published.map((a) => a.id), createdAt: daysAgo(100),
-    },
-    {
-      id: 'app-wx', name: '微信小程序', owner: '增长团队', accessKey: randomKey('ak', 16), secretKey: randomKey('sk', 32),
-      status: 'active', apiIds: published.slice(0, 6).map((a) => a.id), createdAt: daysAgo(80),
-    },
-    {
-      id: 'app-partner', name: '第三方合作伙伴-云仓', owner: '开放平台部', accessKey: randomKey('ak', 16), secretKey: randomKey('sk', 32),
-      status: 'disabled', apiIds: ['api-open-weather'], createdAt: daysAgo(30),
-    },
+    demo('app-mall', '商城 App', '前端一组', 'active', published.map((a) => a.id), daysAgo(100)),
+    demo('app-wx', '微信小程序', '增长团队', 'active', published.slice(0, 6).map((a) => a.id), daysAgo(80)),
+    demo('app-partner', '第三方合作伙伴-云仓', '开放平台部', 'disabled', ['api-open-weather'], daysAgo(30)),
   ]
 }
 

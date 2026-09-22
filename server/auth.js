@@ -1,5 +1,5 @@
-// 管理员认证：账号密码登录、内存会话、防暴力破解锁定、多用户与角色
-import { randomBytes, scryptSync, createHash, timingSafeEqual } from 'node:crypto'
+// 管理员认证：账号密码登录、HMAC 签名令牌（重启不掉线）、防暴力破解锁定、多用户与角色
+import { randomBytes, scryptSync, createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { db } from './db.js'
 
 db.exec(`
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL
 );
 `)
-// 存量库迁移：补充角色列 / 强制改密标记列
+// 存量库迁移：补充角色列 / 强制改密标记列 / 令牌版本列
 try {
   db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'`)
 } catch {
@@ -21,6 +21,13 @@ try {
 } catch {
   // 列已存在
 }
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN token_ver INTEGER NOT NULL DEFAULT 0`)
+} catch {
+  // 列已存在
+}
+// 服务端私有键值存储（令牌签名密钥、全局令牌纪元）
+db.exec(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)`)
 
 const SESSION_TTL = 12 * 3600 * 1000 // 12 小时
 const MAX_ATTEMPTS = 5
@@ -29,10 +36,35 @@ const LOCK_DURATION = 5 * 60 * 1000 // 锁定 5 分钟
 export const ROLES = ['viewer', 'operator', 'admin']
 export const ROLE_LEVEL = { viewer: 0, operator: 1, admin: 2 }
 
-// token -> { username, role, exp }
-const sessions = new Map()
 // username -> { count, lockUntil }
 const loginAttempts = new Map()
+// 注销名单（仅内存；令牌本身 12h 过期，重启后名单清零属可接受范围）
+const revokedTokens = new Set()
+
+const kvGet = (k) => db.prepare('SELECT v FROM kv WHERE k = ?').get(k)?.v
+const kvSet = (k, v) =>
+  db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, v)
+
+// 令牌签名密钥：首次启动生成并持久化到 DB。注意：备份文件包含该密钥，备份需按敏感数据保管
+const TOKEN_SECRET =
+  kvGet('token_secret') ??
+  (() => {
+    const v = randomBytes(32).toString('base64url')
+    kvSet('token_secret', v)
+    return v
+  })()
+// 全局令牌纪元：revokeAllSessions 时自增，使所有已签发令牌立即失效
+let tokenEpoch = Number(kvGet('token_epoch') ?? 0)
+
+const b64u = (s) => Buffer.from(s).toString('base64url')
+const sign = (payload) => createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url')
+
+/** 签发令牌：base64url(payload).hmac，payload 含用户名/角色快照/令牌版本/纪元/过期时间 */
+function issueToken(username, role) {
+  const ver = db.prepare('SELECT token_ver FROM users WHERE username = ?').get(username)?.token_ver ?? 0
+  const payload = b64u(JSON.stringify({ u: username, r: role, v: ver, e: tokenEpoch, exp: Date.now() + SESSION_TTL }))
+  return `${payload}.${sign(payload)}`
+}
 
 /** 当前算法：scrypt（带前缀标识）。N=16384, r=8, p=1 为默认参数 */
 function hash(password, salt) {
@@ -100,26 +132,42 @@ export function login(username, password) {
     db.prepare('UPDATE users SET salt = ?, pass_hash = ? WHERE username = ?').run(salt, hash(password, salt), username)
   }
   loginAttempts.delete(username)
-  const token = randomBytes(24).toString('hex')
-  sessions.set(token, { username, role: row.role ?? 'admin', exp: Date.now() + SESSION_TTL })
+  const token = issueToken(username, row.role ?? 'admin')
   return { token, username, role: row.role ?? 'admin', expiresIn: SESSION_TTL / 1000, mustChangePwd: !!row.must_change_pwd }
 }
 
-/** 校验请求中的 Bearer token，返回会话（含角色）或 null */
+/**
+ * 校验 Bearer token：签名校验（常量时间）→ 过期 → 注销名单 → 全局纪元 → 用户令牌版本。
+ * 角色以 DB 当前值为准（角色被调整后旧令牌自动按新角色生效/失效）。
+ */
 export function verify(req) {
   const h = req.headers.authorization
   const token = h && h.startsWith('Bearer ') ? h.slice(7) : null
-  const s = token ? sessions.get(token) : null
-  if (!s) return null
-  if (s.exp < Date.now()) {
-    sessions.delete(token)
+  if (!token || revokedTokens.has(token)) return null
+  const dot = token.lastIndexOf('.')
+  if (dot <= 0) return null
+  const payload = token.slice(0, dot)
+  const sig = token.slice(dot + 1)
+  const expect = sign(payload)
+  const a = Buffer.from(sig)
+  const b = Buffer.from(expect)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null
+  let data
+  try {
+    data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'))
+  } catch {
     return null
   }
-  return { ...s, token }
+  if (!data?.u || typeof data.exp !== 'number' || data.exp < Date.now()) return null
+  if (data.e !== tokenEpoch) return null
+  const row = db.prepare('SELECT role, token_ver FROM users WHERE username = ?').get(data.u)
+  if (!row || row.token_ver !== data.v) return null
+  return { username: data.u, role: row.role, token }
 }
 
+/** 注销单个令牌（退出登录） */
 export function logout(token) {
-  sessions.delete(token)
+  if (token) revokedTokens.add(token)
 }
 
 /** 会话角色是否满足最低要求 */
@@ -133,9 +181,8 @@ export function changePassword(username, oldPassword, newPassword) {
   if (verifyPassword(row, oldPassword) === 'bad') return { ok: false, message: '原密码不正确' }
   if (typeof newPassword !== 'string' || newPassword.length < 8) return { ok: false, message: '新密码至少 8 位' }
   const salt = randomBytes(16).toString('hex')
-  db.prepare('UPDATE users SET salt = ?, pass_hash = ?, must_change_pwd = 0 WHERE username = ?').run(salt, hash(newPassword, salt), username)
-  // 修改密码后注销该用户所有会话
-  for (const [t, s] of sessions) if (s.username === username) sessions.delete(t)
+  // token_ver 自增：修改密码后该用户所有已签发令牌立即失效
+  db.prepare('UPDATE users SET salt = ?, pass_hash = ?, must_change_pwd = 0, token_ver = token_ver + 1 WHERE username = ?').run(salt, hash(newPassword, salt), username)
   return { ok: true }
 }
 
@@ -156,7 +203,7 @@ export function upsertUser({ username, password, role }) {
       const adminCount = db.prepare(`SELECT COUNT(*) c FROM users WHERE role = 'admin'`).get().c
       if (adminCount <= 1) return { ok: false, message: '系统至少保留一个管理员' }
     }
-    // 已存在：更新角色，可选重置密码（重置后用户下次登录须自行改密）；角色或密码变化后旧会话立即失效
+    // 已存在：更新角色，可选重置密码（重置后用户下次登录须自行改密）；角色或密码变化后旧令牌立即失效
     db.prepare('UPDATE users SET role = ? WHERE username = ?').run(role, username)
     if (password) {
       if (password.length < 8) return { ok: false, message: '密码至少 8 位' }
@@ -183,23 +230,18 @@ export function deleteUser(username, currentUsername) {
     const adminCount = db.prepare(`SELECT COUNT(*) c FROM users WHERE role = 'admin'`).get().c
     if (adminCount <= 1) return { ok: false, message: '系统至少保留一个管理员' }
   }
+  // 删除用户后其令牌自然失效（verify 查不到用户）
   db.prepare('DELETE FROM users WHERE username = ?').run(username)
-  for (const [t, s] of sessions) if (s.username === username) sessions.delete(t)
   return { ok: true }
 }
 
-/** 角色变更/删除后，让该用户旧会话立即失效 */
+/** 角色变更/密码重置后，让该用户旧令牌立即失效（令牌版本自增） */
 export function revokeSessions(username) {
-  for (const [t, s] of sessions) if (s.username === username) sessions.delete(t)
+  db.prepare('UPDATE users SET token_ver = token_ver + 1 WHERE username = ?').run(username)
 }
 
-/** 注销全部会话（如恢复含用户表的备份后强制重新登录） */
+/** 注销全部令牌（如恢复含用户表的备份后强制重新登录）：全局纪元自增 */
 export function revokeAllSessions() {
-  sessions.clear()
+  tokenEpoch += 1
+  kvSet('token_epoch', String(tokenEpoch))
 }
-
-// 定期清理过期会话
-setInterval(() => {
-  const now = Date.now()
-  for (const [t, s] of sessions) if (s.exp < now) sessions.delete(t)
-}, 10 * 60 * 1000).unref()

@@ -4,13 +4,21 @@ import http from 'node:http'
 import { existsSync, statSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { db, store, recordMetric, queryMetrics, apiCallStats, seedAll, addLog, queryLogs, queryMinuteMetrics, addAudit, queryAudit, createBackup, restoreFrom, backupStream, fileSize, removeFile } from './db.js'
 import { ensureAdmin, login, verify, logout, changePassword, hasRole, listUsers, upsertUser, deleteUser, revokeAllSessions } from './auth.js'
 import { runArchive, listArchives, openArchive, startArchiver, RETENTION_DAYS } from './archive.js'
 
 ensureAdmin()
+// 存量数据迁移：v1.4.0 起 SecretKey 只存 SHA-256 哈希，明文不再落库
+for (const a of store.list('apps')) {
+  if (a.secretKey) {
+    a.secretKeyHash = skHash(a.secretKey)
+    delete a.secretKey
+    store.upsert('apps', a)
+  }
+}
 startArchiver()
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3100
@@ -25,14 +33,16 @@ const ALLOW_LOCAL_TEST = process.env.ALLOW_LOCAL_TEST === '1'
 
 /** 加密安全的应用密钥生成（base64url，ak 16 字节 / sk 32 字节） */
 const genKey = (prefix, bytes) => `${prefix}_${randomBytes(bytes).toString('base64url')}`
+/** SecretKey 存储哈希（SHA-256）。网关比对哈希值；SK 高熵随机串，无需慢哈希 */
+function skHash(sk) {
+  return createHash('sha256').update(String(sk ?? '')).digest('hex')
+}
 /** 常量时间字符串比较（防时序侧信道） */
 const safeEq = (a, b) => {
   const ba = Buffer.from(String(a ?? ''))
   const bb = Buffer.from(String(b ?? ''))
   return ba.length === bb.length && timingSafeEqual(ba, bb)
 }
-/** SecretKey 脱敏：仅保留前 6 后 4，供只读角色查看 */
-const maskSecret = (sk) => String(sk ?? '').slice(0, 6) + '****' + String(sk ?? '').slice(-4)
 /** 客户端真实 IP：仅在 TRUST_PROXY=1（前方有受信反向代理）时采用 X-Forwarded-For 首跳，否则取 socket 地址防伪造 */
 const clientIp = (req) => {
   if (process.env.TRUST_PROXY === '1') {
@@ -99,6 +109,15 @@ function serveStatic(req, res, url) {
 }
 
 /* ---------- 运行时状态（内存） ---------- */
+// AccessKey 索引：ak -> app 快照，避免网关每请求全量解析应用表；应用增删改/备份恢复/重置演示数据时失效重建
+let akIndex = null
+function getAppByAk(ak) {
+  if (!akIndex) {
+    akIndex = new Map()
+    for (const a of store.list('apps')) akIndex.set(a.accessKey, a)
+  }
+  return akIndex.get(String(ak)) ?? null
+}
 // 限流：apiId -> { sec, count }
 const rateBuckets = new Map()
 // 熔断：apiId -> [{ts, ok}]
@@ -203,15 +222,38 @@ async function assertTargetAllowed(parsed) {
   }
 }
 
-/** 把注册路径 /api/v1/users/{id} 编译成匹配器 */
+/** 网关转发用 SSRF 校验：带 60 秒结果缓存，避免每次转发都做一次 DNS 解析 */
+const ssrfCache = new Map() // host -> { ok, msg, exp }
+async function assertBackendAllowed(backendUrl) {
+  const parsed = new URL(backendUrl)
+  const host = parsed.hostname.toLowerCase()
+  const cached = ssrfCache.get(host)
+  if (cached && cached.exp > Date.now()) {
+    if (cached.ok) return
+    throw new Error(cached.msg)
+  }
+  try {
+    await assertTargetAllowed(parsed)
+    ssrfCache.set(host, { ok: true, exp: Date.now() + 60_000 })
+  } catch (err) {
+    ssrfCache.set(host, { ok: false, msg: err.message, exp: Date.now() + 60_000 })
+    throw err
+  }
+}
+
+/** 把注册路径 /api/v1/users/{id} 编译成匹配器；编译结果按路径字符串缓存，避免每请求重复编译正则 */
+const compiledPathCache = new Map()
 function compilePath(path) {
+  const cached = compiledPathCache.get(path)
+  if (cached) return cached
   const names = []
   const pattern = path.replace(/[.*+?^${}()|[\]\\]/g, (m) => '\\' + m).replace(/\\\{(\w+)\\\}/g, (_, n) => {
     names.push(n)
     return '([^/]+)'
   })
-  const re = new RegExp('^' + pattern + '$')
-  return { re, names }
+  const compiled = { re: new RegExp('^' + pattern + '$'), names }
+  compiledPathCache.set(path, compiled)
+  return compiled
 }
 
 function matchApi(apis, method, reqPath) {
@@ -286,9 +328,12 @@ function evaluateAlerts(apiId) {
         detail = `平均延迟 ${m.avgLatency}ms，阈值 ${rule.threshold}ms`
       }
     } else if (rule.metric === 'qps') {
-      if (m.calls > rule.threshold) {
+      // 真实 QPS：近 60 秒滑动窗口调用数 / 60（此前误用当日累计总量，语义不符）
+      const window60 = (recentCalls.get(apiId) ?? []).filter((r) => r.ts > Date.now() - 60_000)
+      const qps = window60.length / 60
+      if (qps > rule.threshold) {
         hit = true
-        detail = `今日调用量 ${m.calls}，阈值 ${rule.threshold}`
+        detail = `当前 QPS ${qps.toFixed(1)}（近 60 秒均值），阈值 ${rule.threshold}`
       }
     }
     if (!hit) continue
@@ -314,6 +359,8 @@ function evaluateAlerts(apiId) {
 
 /* ---------- 网关转发 ---------- */
 async function forward(api, params, req, body, url) {
+  // 转发前 SSRF 兜底校验（注册时已校验；此处带 60s 结果缓存防 DNS 每请求开销，双重防护防备份恢复/直写库绕过）
+  await assertBackendAllowed(api.backendUrl)
   // 替换后端地址中的 {param} 占位符
   let target = api.backendUrl
   for (const [k, v] of Object.entries(params)) target = target.replaceAll(`{${k}}`, encodeURIComponent(v))
@@ -332,7 +379,9 @@ async function forward(api, params, req, body, url) {
   if (body.length > 0 && !headers['content-type']) headers['content-type'] = 'application/json'
 
   let lastErr = null
-  const attempts = 1 + (api.retry || 0)
+  // 仅幂等方法自动重试；POST/PATCH 等非幂等方法 5xx 重试会导致上游重复执行（重复下单/重复扣款），一律不重试
+  const IDEMPOTENT = ['GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS']
+  const attempts = 1 + (IDEMPOTENT.includes(api.method) ? (api.retry || 0) : 0)
   for (let i = 0; i < attempts; i++) {
     try {
       const upstream = await fetch(target, {
@@ -383,17 +432,17 @@ async function handleGateway(req, res, url) {
     return json(res, 403, { code: 40301, message: `API「${api.name}」当前状态为 ${api.status}，不可调用` }, '*')
   }
 
-  // 鉴权：AccessKey 定位应用 + SecretKey 校验（双因子，均常量时间比较）
+  // 鉴权：AccessKey 定位应用（内存索引） + SecretKey 哈希校验（双因子，均常量时间比较）
   if (api.auth === 'apikey') {
     const ak = req.headers['x-access-key']
-    const app = ak ? store.list('apps').find((a) => safeEq(a.accessKey, ak)) : null
+    const app = ak ? getAppByAk(ak) : null
     if (app) log.appName = app.name
     if (!app) {
       writeLog(401, { message: '缺少或无效的 AccessKey' })
       return json(res, 401, { code: 40100, message: '缺少或无效的 X-Access-Key' }, '*')
     }
     const sk = req.headers['x-secret-key']
-    if (!sk || !safeEq(app.secretKey, sk)) {
+    if (!sk || !app.secretKeyHash || !safeEq(app.secretKeyHash, skHash(sk))) {
       writeLog(401, { appName: app.name, message: '缺少或无效的 SecretKey' })
       return json(res, 401, { code: 40102, message: '缺少或无效的 X-Secret-Key' }, '*')
     }
@@ -448,6 +497,11 @@ async function handleGateway(req, res, url) {
     evaluateAlerts(api.id)
     updateCircuitBreaker(api)
     const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+    const isSsrfBlock = String(err?.message ?? '').includes('安全策略拦截')
+    if (isSsrfBlock) {
+      writeLog(403, { message: err.message })
+      return json(res, 403, { code: 40303, message: err.message }, '*')
+    }
     writeLog(isTimeout ? 504 : 502, { message: isTimeout ? '后端超时' : `后端不可达 ${err?.cause?.code ?? ''}` })
     json(res, isTimeout ? 504 : 502, {
       code: isTimeout ? 50400 : 50200,
@@ -490,8 +544,11 @@ function fullState(role) {
     health: computeHealth(a.id) === 'unknown' ? (a.status === 'published' ? 'healthy' : 'unknown') : computeHealth(a.id),
     ...(stats.get(a.id) ?? { todayCalls: 0, calls30d: 0 }),
   }))
-  // SecretKey 脱敏：只读角色仅能查看掩码，不能获取完整密钥
-  const apps = store.list('apps').map((a) => (role === 'viewer' ? { ...a, secretKey: maskSecret(a.secretKey) } : a))
+  // SecretKey 自 v1.4.0 起仅存储哈希、永不下发；所有角色看到的都是脱敏占位（仅创建/重置时一次性返回明文）
+  const apps = store.list('apps').map((a) => {
+    const { secretKeyHash, ...rest } = a
+    return { ...rest, secretKey: 'sk_****（已加密存储，仅创建/重置时可见）****' }
+  })
   return {
     apis,
     groups: store.list('groups'),
@@ -651,6 +708,7 @@ async function handleAdmin(req, res, url) {
       recentCalls.clear()
       cbWindows.clear()
       cbOpenUntil.clear()
+      akIndex = null
       rateBuckets.clear()
       // 恢复后审计表已被备份内容替换，追加本次恢复记录
       audit('恢复备份', null, `恢复 ${r.tables} 张数据表${includeUsers ? '（含用户账号，全部会话已注销）' : ''}`)
@@ -690,6 +748,7 @@ async function handleAdmin(req, res, url) {
       cbWindows.clear()
       cbOpenUntil.clear()
       rateBuckets.clear()
+      akIndex = null
       audit('重置演示数据')
       return j( 200, { ok: true })
     }
@@ -751,6 +810,11 @@ async function handleAdmin(req, res, url) {
       const api = store.get('apis', id)
       if (!api) return j( 404, { message: 'API 不存在' })
       if (!['draft', 'published', 'offline', 'deprecated'].includes(status)) return j( 400, { message: '非法状态' })
+      // 严格生命周期状态机：draft → published → offline → deprecated（终态，仅可删除）；不允许跨级跳转
+      const TRANSITIONS = { draft: ['published', 'deprecated'], published: ['offline'], offline: ['published', 'deprecated'], deprecated: [] }
+      if (api.status !== status && !(TRANSITIONS[api.status] ?? []).includes(status)) {
+        return j( 409, { message: `非法状态流转：${api.status} → ${status}。生命周期为 草稿→发布→下线→废弃（废弃为终态）` })
+      }
       // 安全约束：已授权给启用中应用的 API 禁止下线/废弃，防止在线调用方业务中断
       if (status === 'offline' || status === 'deprecated') {
         const blockers = store.list('apps').filter((a) => a.status === 'active' && a.apiIds.includes(id))
@@ -782,27 +846,50 @@ async function handleAdmin(req, res, url) {
         return j( 409, { message: `API「${existing.name}」当前为已发布状态，不允许编辑，请先下线` })
       }
       const isNew = !existing
-      // 应用密钥一律由服务端以加密安全随机数生成，不信任客户端提交的密钥值
+      // 路由唯一约束：method + path 服务端全局唯一，避免相同路由互相遮蔽
+      if (kind === 'apis') {
+        const clash = store.list('apis').find((a) => a.id !== obj.id && a.method === obj.method && a.path === obj.path)
+        if (clash) return j( 409, { message: `路由冲突：${obj.method} ${obj.path} 已被 API「${clash.name}」占用` })
+        // backendUrl SSRF 注册时校验（网关转发时另有带缓存的兜底校验，双层防护）
+        let backend
+        try {
+          backend = new URL(String(obj.backendUrl ?? ''))
+        } catch {
+          return j( 400, { message: '后端地址不是合法的 URL' })
+        }
+        try {
+          await assertTargetAllowed(backend)
+        } catch (e) {
+          return j( 403, { message: `后端地址不允许：${e.message}` })
+        }
+      }
+      // 应用密钥一律由服务端以加密安全随机数生成，不信任客户端提交的密钥值；
+      // SK 自 v1.4.0 起只存 SHA-256 哈希，明文仅在创建/重置的本次响应中一次性返回
+      let plainSk = null
       if (kind === 'apps') {
         if (isNew) {
           obj.accessKey = genKey('ak', 16)
-          obj.secretKey = genKey('sk', 32)
+          plainSk = genKey('sk', 32)
         } else {
           obj.accessKey = existing.accessKey // AccessKey 创建后不可变
           if (obj.resetSecret === true) {
             if (existing.status === 'active') return j( 409, { message: '启用中的应用不允许重置 SecretKey，请先停用该应用' })
-            obj.secretKey = genKey('sk', 32)
+            plainSk = genKey('sk', 32)
             audit('重置 SecretKey', obj.name ?? obj.id)
-          } else {
-            obj.secretKey = existing.secretKey
           }
         }
         delete obj.resetSecret
+        delete obj.secretKey // 客户端提交的密钥值一律丢弃
+        obj.secretKeyHash = plainSk ? skHash(plainSk) : existing.secretKeyHash
       }
       store.upsert(kind, obj)
+      if (kind === 'apps') akIndex = null // 应用变更后重建 AccessKey 索引
       const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
       audit(`${isNew ? '新建' : '更新'}${kindLabel}`, obj.name ?? obj.id)
-      return j( 200, obj)
+      const resp = { ...obj }
+      delete resp.secretKeyHash
+      if (plainSk) resp.secretKey = plainSk // 明文仅此一次
+      return j( 200, resp)
     }
 
     if (kind && req.method === 'DELETE' && id) {
@@ -812,7 +899,15 @@ async function handleAdmin(req, res, url) {
       if (kind === 'apis' && existed && existed.status !== 'deprecated') {
         return j( 409, { message: `API「${existed.name}」当前状态为 ${existed.status}，仅废弃状态的 API 才能删除` })
       }
+      // 引用保护：分组下仍有 API 时禁止删除，避免悬空引用
+      if (kind === 'groups') {
+        const used = store.list('apis').filter((a) => a.groupId === id)
+        if (used.length > 0) {
+          return j( 409, { message: `无法删除：分组「${existed?.name ?? id}」下还有 ${used.length} 个 API（${used.slice(0, 3).map((a) => a.name).join('、')}${used.length > 3 ? ' 等' : ''}），请先移除或调整其分组` })
+        }
+      }
       store.remove(kind, id)
+      if (kind === 'apps') akIndex = null // 应用删除后重建 AccessKey 索引
       const kindLabel = { apis: 'API', groups: '分组', apps: '应用', rules: '告警规则' }[kind]
       audit(`删除${kindLabel}`, existed?.name ?? id)
       if (kind === 'apis') {

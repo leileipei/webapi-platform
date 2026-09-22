@@ -9,8 +9,22 @@
  * 请对测试实例运行，勿对生产数据运行。
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:3100'
-// 管理员口令可被环境变量覆盖（CI 冒烟步骤已完成强制改密时需传入新口令）
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'Admin@123'
+// 管理员口令可被环境变量覆盖（CI 冒烟步骤已完成强制改密时需传入新口令）；
+// 本机重复运行时，上次强制改密生成的随机口令保存在 .e2e-admin-pwd（按 BASE 区分，勿提交）
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+const PWD_FILE = join(dirname(fileURLToPath(import.meta.url)), '.e2e-admin-pwd.json')
+const readSavedPwd = () => {
+  try { return JSON.parse(readFileSync(PWD_FILE, 'utf-8'))[BASE] ?? null } catch { return null }
+}
+const savePwd = (pwd) => {
+  let all = {}
+  try { all = JSON.parse(readFileSync(PWD_FILE, 'utf-8')) } catch { /* 首次 */ }
+  all[BASE] = pwd
+  writeFileSync(PWD_FILE, JSON.stringify(all))
+}
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || readSavedPwd() || 'Admin@123'
 let pass = 0, fail = 0
 const ok = (name, cond, extra = '') => {
   cond ? pass++ : fail++
@@ -24,7 +38,13 @@ try {
   ok('健康检查 /healthz', r.status === 200 && r.body.ok === true)
 
   // 2. 管理员登录
+  let ADMIN_PASSWORD_USED = ADMIN_PASSWORD
   r = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: ADMIN_PASSWORD }) }))
+  // 保存的口令失效（如实例数据已重建）时回退默认初始密码
+  if (r.status === 401 && !process.env.E2E_ADMIN_PASSWORD && ADMIN_PASSWORD !== 'Admin@123') {
+    ADMIN_PASSWORD_USED = 'Admin@123'
+    r = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'Admin@123' }) }))
+  }
   ok('管理员登录', r.status === 200 && !!r.body.token)
   if (!r.body?.token) throw new Error('登录失败，后续用例无法执行')
   let token = r.body.token
@@ -34,8 +54,9 @@ try {
     const blocked = await j(await fetch(`${BASE}/admin/apis`, { headers: { Authorization: `Bearer ${token}` } }))
     ok('初始密码状态管理接口被阻断(40310)', blocked.status === 403 && blocked.body?.code === 40310)
     const newPwd = `E2e!${Date.now()}x`
-    const cp = await j(await fetch(`${BASE}/admin/auth/password`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ oldPassword: ADMIN_PASSWORD, newPassword: newPwd }) }))
+    const cp = await j(await fetch(`${BASE}/admin/auth/password`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ oldPassword: ADMIN_PASSWORD_USED, newPassword: newPwd }) }))
     ok('强制改密完成', cp.status === 200)
+    savePwd(newPwd)
     const relogin = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: newPwd }) }))
     ok('改密后重新登录', relogin.status === 200 && !!relogin.body.token && !relogin.body.mustChangePwd)
     if (!relogin.body?.token) throw new Error('改密后登录失败')
@@ -47,10 +68,12 @@ try {
   r = await j(await fetch(`${BASE}/admin/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'wrong' }) }))
   ok('错误密码被拒绝(401)', r.status === 401)
 
-  // 2c. 清理上次运行残留的冒烟数据（v1.1 起已发布 API 禁止编辑，残留会导致重复运行失败）
+  // 2c. 清理上次运行残留的冒烟数据（状态机要求 published → offline → deprecated → 删除）
   for (const appId of ['smoke-app-1', 'smoke-app-2']) {
     await fetch(`${BASE}/admin/apps/${appId}`, { method: 'DELETE', headers: H }).catch(() => {})
   }
+  await fetch(`${BASE}/admin/apis/smoke-group-1`, { method: 'DELETE', headers: H }).catch(() => {})
+  await fetch(`${BASE}/admin/apis/smoke-api-1/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'offline' }) }).catch(() => {})
   await fetch(`${BASE}/admin/apis/smoke-api-1/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }).catch(() => {})
   await fetch(`${BASE}/admin/apis/smoke-api-1`, { method: 'DELETE', headers: H }).catch(() => {})
 
@@ -63,6 +86,23 @@ try {
   }
   r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify(api) }))
   ok('注册 API（草稿）', r.status === 200 && r.body.id === api.id)
+
+  // 3b. 路由唯一约束：相同 method+path 注册应 409
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-dup' }) }))
+  ok('重复路由注册被拒(409)', r.status === 409)
+
+  // 3c. 分组引用保护：分组下有 API 时删除应 409
+  await j(await fetch(`${BASE}/admin/groups`, { method: 'POST', headers: H, body: JSON.stringify({ id: 'smoke-group-1', name: '冒烟分组', createdAt: '2026-09-07' }) }))
+  await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, groupId: 'smoke-group-1' }) }))
+  r = await j(await fetch(`${BASE}/admin/groups/smoke-group-1`, { method: 'DELETE', headers: H }))
+  ok('分组引用保护(409)', r.status === 409)
+  await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, groupId: null }) }))
+  r = await j(await fetch(`${BASE}/admin/groups/smoke-group-1`, { method: 'DELETE', headers: H }))
+  ok('空分组可删除(200)', r.status === 200)
+
+  // 3d. backendUrl SSRF 注册时校验：云元数据地址应 403（用独立路径避免先触发路由唯一约束）
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-ssrf', path: '/api/v1/smoke-ssrf', backendUrl: 'http://169.254.169.254/latest/meta-data' }) }))
+  ok('注册时 SSRF 拦截(403)', r.status === 403, `status=${r.status} ${r.body?.message ?? ''}`)
 
   // 4. 后端地址连通性测试
   r = await j(await fetch(`${BASE}/admin/test`, { method: 'POST', headers: H, body: JSON.stringify({ url: `${BASE}/upstream/echo/ping` }) }))
@@ -78,12 +118,21 @@ try {
   r = await j(await fetch(`${BASE}/admin/apis/${api.id}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'published' }) }))
   ok('发布 API', r.status === 200 && r.body.status === 'published')
 
+  // 6b. 状态机：已发布不允许直接废弃（须先下线）
+  r = await j(await fetch(`${BASE}/admin/apis/${api.id}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }))
+  ok('非法状态流转被拒(409)', r.status === 409)
+
   // 7. 创建应用并授权（密钥由服务端生成，不信任客户端提交值）
   const app = { id: 'smoke-app-1', name: '冒烟测试应用', owner: 'QA', accessKey: 'ak_client_supplied_bad', secretKey: 'sk_client_supplied_bad', status: 'active', apiIds: [api.id], createdAt: '2026-09-07' }
   r = await j(await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify(app) }))
   ok('创建应用并授权（服务端生成密钥）', r.status === 200 && r.body.accessKey?.startsWith('ak_') && r.body.secretKey?.startsWith('sk_') && r.body.accessKey !== 'ak_client_supplied_bad')
   const ak = r.body.accessKey, sk = r.body.secretKey
   const HK = { 'X-Access-Key': ak, 'X-Secret-Key': sk }
+
+  // 7c. SK 哈希存储：状态接口不下发明文 SK，也不泄漏哈希
+  r = await j(await fetch(`${BASE}/admin/state`, { headers: H }))
+  const appInState = r.body?.apps?.find((a) => a.id === 'smoke-app-1')
+  ok('SK 不明文下发/哈希不泄漏', !!appInState && appInState.secretKey !== sk && String(appInState.secretKey ?? '').includes('****') && !JSON.stringify(appInState).includes('secretKeyHash'))
 
   // 7b. 连通性测试 SSRF 防护：云元数据地址始终拦截
   r = await j(await fetch(`${BASE}/admin/test`, { method: 'POST', headers: H, body: JSON.stringify({ url: 'http://169.254.169.254/latest/meta-data' }) }))

@@ -76,8 +76,8 @@ function reducer(state: State, action: Action): State {
 
 const emptyState: State = { apis: [], groups: [], apps: [], alertRules: [], alertRecords: [] }
 
-/** 把动作同步到后端，成功后更新本地状态；失败时 toast 且不更新本地 */
-async function syncToBackend(action: Action): Promise<void> {
+/** 把动作同步到后端，成功后更新本地状态；失败时 toast 且不更新本地；upsertApp 返回服务端响应（含一次性明文密钥） */
+async function syncToBackend(action: Action): Promise<unknown> {
   switch (action.type) {
     case 'upsertApi':
       await apiClient.post('/admin/apis', action.api)
@@ -95,8 +95,8 @@ async function syncToBackend(action: Action): Promise<void> {
       await apiClient.del(`/admin/groups/${action.id}`)
       break
     case 'upsertApp':
-      await apiClient.post('/admin/apps', action.app)
-      break
+      // 返回服务端响应：创建/重置密钥时明文 SK 仅此一份，交由页面一次性展示
+      return await apiClient.post('/admin/apps', action.app)
     case 'deleteApp':
       await apiClient.del(`/admin/apps/${action.id}`)
       break
@@ -120,7 +120,7 @@ async function syncToBackend(action: Action): Promise<void> {
 interface StoreValue {
   state: State
   /** 同步到后端成功后更新本地状态；返回 Promise 便于调用方等待写入完成（失败时已 toast 并继续 reject） */
-  dispatch: (action: Action) => Promise<void>
+  dispatch: (action: Action) => Promise<unknown>
   ready: boolean
   loadError: string | null
   reload: () => void
@@ -157,15 +157,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(load, [load])
 
   const dispatch = useCallback(
-    (action: Action): Promise<void> => {
+    (action: Action): Promise<unknown> => {
       return syncToBackend(action)
-        .then(() => {
+        .then((resp) => {
           // upsertApp 的密钥由服务端生成/重置，本地必须回读服务端结果而非信任提交值
           if (action.type === 'reset' || action.type === 'upsertApp') {
             load()
           } else {
             localDispatch(action)
           }
+          return resp
         })
         .catch((err) => {
           toast.error(`操作失败：${err?.message ?? '后端不可用'}`)

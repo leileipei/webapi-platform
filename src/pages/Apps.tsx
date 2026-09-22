@@ -34,6 +34,8 @@ export default function Apps() {
   const [toDelete, setToDelete] = useState<AppCredential | null>(null)
   const [toReset, setToReset] = useState<AppCredential | null>(null)
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({})
+  // 创建/重置成功后的一次性密钥展示（明文只存在于本次服务端响应中）
+  const [issued, setIssued] = useState<{ name: string; accessKey: string; secretKey: string } | null>(null)
 
   const copy = async (text: string, label: string) => {
     const okCopy = await copyText(text)
@@ -50,13 +52,15 @@ export default function Apps() {
     setDialogOpen(true)
   }
 
-  const save = () => {
+  const save = async () => {
     if (!editing) return
     if (!editing.name.trim()) return toast.error('请填写应用名称')
     if (!editing.owner.trim()) return toast.error('请填写负责人/团队')
-    dispatch({ type: 'upsertApp', app: editing })
-    toast.success('应用已保存，AccessKey / SecretKey 由系统生成')
+    const resp = (await dispatch({ type: 'upsertApp', app: editing })) as { secretKey?: string; accessKey?: string } | undefined
     setDialogOpen(false)
+    // 密钥明文仅在创建/重置的本次响应中返回，必须立即提示保存
+    if (resp?.secretKey) setIssued({ name: editing.name, accessKey: resp.accessKey ?? '', secretKey: resp.secretKey })
+    else toast.success('应用已保存')
   }
 
   const requestRegenerate = (app: AppCredential) => {
@@ -67,10 +71,11 @@ export default function Apps() {
     setToReset(app)
   }
 
-  const regenerate = (app: AppCredential) => {
-    // 服务端校验停用状态并生成新密钥（resetSecret 标记）
-    dispatch({ type: 'upsertApp', app: { ...app, secretKey: '', resetSecret: true } })
-    toast.success(`「${app.name}」SecretKey 已重置，旧密钥立即失效`)
+  const regenerate = async (app: AppCredential) => {
+    // 服务端校验停用状态并生成新密钥（resetSecret 标记）；明文仅本次响应返回
+    const resp = (await dispatch({ type: 'upsertApp', app: { ...app, secretKey: '', resetSecret: true } })) as { secretKey?: string; accessKey?: string } | undefined
+    if (resp?.secretKey) setIssued({ name: app.name, accessKey: resp.accessKey ?? app.accessKey, secretKey: resp.secretKey })
+    else toast.success(`「${app.name}」SecretKey 已重置，旧密钥立即失效`)
   }
 
   return (
@@ -147,7 +152,7 @@ export default function Apps() {
                       </Button>
                     </>
                   )}
-                  {isMasked(app.secretKey) && <span className="text-[10px] text-slate-400">仅操作员/管理员可见</span>}
+                  {isMasked(app.secretKey) && <span className="text-[10px] text-slate-400">已加密存储，仅创建/重置时可见一次</span>}
                   {write && (
                     <Button
                       variant="ghost" size="icon"
@@ -277,6 +282,39 @@ export default function Apps() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 一次性密钥展示：明文仅存在于本次服务端响应，关闭后无法再次查看 */}
+      <Dialog open={!!issued} onOpenChange={(open) => !open && setIssued(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>「{issued?.name}」密钥已生成</DialogTitle>
+            <DialogDescription>
+              请立即复制并妥善保管以下密钥。SecretKey 已加密存储，<span className="font-semibold text-red-600">关闭此窗口后将无法再次查看</span>，只能通过重置获取新密钥。
+            </DialogDescription>
+          </DialogHeader>
+          {issued && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
+                <span className="shrink-0 text-xs text-slate-500">AccessKey</span>
+                <code className="flex-1 truncate text-xs">{issued.accessKey}</code>
+                <Button variant="ghost" size="icon" className="h-7 w-7" title="复制 AccessKey" onClick={() => copy(issued.accessKey, 'AccessKey ')}>
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2">
+                <span className="shrink-0 text-xs text-slate-500">SecretKey</span>
+                <code className="flex-1 truncate text-xs">{issued.secretKey}</code>
+                <Button variant="ghost" size="icon" className="h-7 w-7" title="复制 SecretKey" onClick={() => copy(issued.secretKey, 'SecretKey ')}>
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button onClick={() => setIssued(null)}>我已妥善保存</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

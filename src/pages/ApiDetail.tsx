@@ -237,16 +237,18 @@ export default function ApiDetail() {
               <Pencil className="mr-1 h-4 w-4" /> 编辑
             </Button>
           ))}
-          {write && (api.status !== 'published' ? (
+          {/* 生命周期：draft/offline 可发布；published 仅可下线；draft/offline 可废弃；deprecated 为终态仅可删除 */}
+          {write && (api.status === 'draft' || api.status === 'offline') && (
             <Button onClick={() => changeStatus('published')}>
               <ArrowUpCircle className="mr-1 h-4 w-4" /> 发布上线
             </Button>
-          ) : (
+          )}
+          {write && api.status === 'published' && (
             <Button variant="outline" className="text-amber-600" onClick={() => setConfirmAction('offline')}>
               <ArrowDownCircle className="mr-1 h-4 w-4" /> 下线
             </Button>
-          ))}
-          {write && api.status !== 'deprecated' && (
+          )}
+          {write && (api.status === 'draft' || api.status === 'offline') && (
             <Button variant="outline" className="text-red-500" onClick={() => setConfirmAction('deprecated')}>
               <Ban className="mr-1 h-4 w-4" /> 废弃
             </Button>

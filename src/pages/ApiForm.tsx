@@ -389,6 +389,7 @@ export default function ApiForm() {
                   {[0, 1, 2, 3].map((n) => <SelectItem key={n} value={String(n)}>{n} 次</SelectItem>)}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-slate-400">仅对 GET/PUT/DELETE 等幂等方法生效；POST/PATCH 上游 5xx 不自动重试，防止重复提交</p>
             </div>
             <div className="space-y-1.5">
               <Label>QPS 限流</Label>

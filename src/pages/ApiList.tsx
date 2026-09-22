@@ -186,7 +186,8 @@ export default function ApiList() {
                           </DropdownMenuItem>
                         ))}
                         {write && <DropdownMenuSeparator />}
-                        {write && a.status !== 'published' && (
+                        {/* 生命周期：draft/offline 可发布；published 仅可下线；draft/offline 可废弃；deprecated 为终态 */}
+                        {write && (a.status === 'draft' || a.status === 'offline') && (
                           <DropdownMenuItem onClick={() => changeStatus(a, 'published')}>
                             <ArrowUpCircle className="mr-2 h-3.5 w-3.5 text-emerald-600" /> 发布上线
                           </DropdownMenuItem>
@@ -196,7 +197,7 @@ export default function ApiList() {
                             <ArrowDownCircle className="mr-2 h-3.5 w-3.5 text-amber-600" /> 下线
                           </DropdownMenuItem>
                         )}
-                        {write && a.status !== 'deprecated' && (
+                        {write && (a.status === 'draft' || a.status === 'offline') && (
                           <DropdownMenuItem onClick={() => setPending({ api: a, action: 'deprecated' })}>
                             <Ban className="mr-2 h-3.5 w-3.5 text-red-500" /> 标记废弃
                           </DropdownMenuItem>
