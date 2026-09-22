@@ -62,6 +62,21 @@ npm run server     # 启动一体化服务（默认绑定 0.0.0.0:3100）
 
 后端启动后会**直接托管前端静态资源**，无需 Nginx：同一局域网内的任意计算机访问 `http://<服务器IP>:3100` 即可使用完整系统（控制台 + 管理 API + 网关）。自定义监听地址：`HOST=0.0.0.0 PORT=8080 node server/index.js`。如需公网访问，请自行在前面加一层 Nginx/HTTPS。
 
+**一键部署 / 升级脚本（Linux / macOS，推荐）**：
+
+```bash
+# 首次部署（含数据初始化、启动/停止脚本、配置文件）
+INSTALL_DIR=/opt/webapi-platform PORT=3100 bash scripts/deploy.sh
+
+# 老版本一键升级（自动备份数据与旧代码，失败自动回滚）
+INSTALL_DIR=/opt/webapi-platform bash scripts/upgrade.sh --from /tmp/webapi-platform-新版本
+```
+
+- `deploy.sh`：环境检查 → 复制代码（**不含**任何运行时数据）→ 生成 `deploy.env` 配置与 `bin/start.sh` / `bin/stop.sh` → 启动并健康检查。数据在首次启动时自动初始化（`server/data.db`）。
+- `upgrade.sh`：健康检查 → 停服 → 打包备份 SQLite 库（含 WAL 文件）与归档目录、旧代码到 `backups/<时间戳>/` → 更新代码（`--from` 新版本代码目录；安装目录是 git 仓库时可省略直接 `git pull`）→ 必要时自动构建前端 → 启服 → 健康检查。**任一环节失败自动回滚**到升级前的代码与数据；备份默认保留最近 5 份（`--keep` 可调）。
+- 升级过程绝不修改业务数据；数据库结构变更由服务启动时自动迁移（向后兼容）。
+- 日常运维：`bin/stop.sh` 停止、`bin/start.sh` 启动；人工回滚命令会在每次升级完成后打印。
+
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `3100` | 后端监听端口 |
