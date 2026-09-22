@@ -127,8 +127,30 @@ const cbWindows = new Map()
 const cbOpenUntil = new Map()
 // 健康度：apiId -> 最近 50 次结果 [{ts, ok, latency}]
 const recentCalls = new Map()
+// QPS 统计：apiId -> Map<秒时间戳, 次数>（近 60 秒滑动窗口，独立于健康度 50 条截断——
+// 否则突发流量下 QPS 告警值会被压缩到 50/60 ≈ 0.83 以下，永远触发不了告警）
+const qpsBuckets = new Map()
+
+function pushQps(apiId) {
+  const nowSec = Math.floor(Date.now() / 1000)
+  let m = qpsBuckets.get(apiId)
+  if (!m) { m = new Map(); qpsBuckets.set(apiId, m) }
+  m.set(nowSec, (m.get(nowSec) ?? 0) + 1)
+  for (const sec of m.keys()) if (sec <= nowSec - 60) m.delete(sec)
+}
+
+/** 近 60 秒滑动窗口的平均 QPS */
+function currentQps(apiId) {
+  const m = qpsBuckets.get(apiId)
+  if (!m) return 0
+  const nowSec = Math.floor(Date.now() / 1000)
+  let sum = 0
+  for (const [sec, c] of m) if (sec > nowSec - 60) sum += c
+  return sum / 60
+}
 
 function pushRecent(apiId, ok, latency) {
+  pushQps(apiId)
   const arr = recentCalls.get(apiId) ?? []
   arr.push({ ts: Date.now(), ok, latency })
   if (arr.length > 50) arr.shift()
@@ -242,7 +264,8 @@ async function assertBackendAllowed(backendUrl) {
   }
 }
 
-/** 把注册路径 /api/v1/users/{id} 编译成匹配器；编译结果按路径字符串缓存，避免每请求重复编译正则 */
+/** 把注册路径 /api/v1/users/{id} 编译成匹配器；编译结果按路径字符串缓存，避免每请求重复编译正则。
+ *  segs：逐段标记 1=静态段 / 0={param} 占位段，用于路由特异性比较 */
 const compiledPathCache = new Map()
 function compilePath(path) {
   const cached = compiledPathCache.get(path)
@@ -252,9 +275,33 @@ function compilePath(path) {
     names.push(n)
     return '([^/]+)'
   })
-  const compiled = { re: new RegExp('^' + pattern + '$'), names }
+  const segs = path.split('/').map((s) => (/^\{\w+\}$/.test(s) ? 0 : 1))
+  const compiled = { re: new RegExp('^' + pattern + '$'), names, segs }
   compiledPathCache.set(path, compiled)
   return compiled
+}
+
+/** 特异性比较：能命中同一请求的两条路由段数必然相同；逐段比较，首个不同位置上静态段（1）优先于参数段（0） */
+function moreSpecific(segsA, segsB) {
+  for (let i = 0; i < segsA.length; i++) {
+    if (segsA[i] !== segsB[i]) return segsA[i] > segsB[i]
+  }
+  return false
+}
+
+/** 判断两个路径模式是否歧义冲突：段数相同、逐段兼容（静态段相等或至少一方为 {param}）、且参数/静态形态完全一致（与参数名无关）。
+ *  一方静态一方参数的交叉形态（如 /goods/search 与 /goods/{id}）不算冲突——匹配时静态优先，结果确定 */
+function routeAmbiguous(p1, p2) {
+  const s1 = p1.split('/')
+  const s2 = p2.split('/')
+  if (s1.length !== s2.length) return false
+  for (let i = 0; i < s1.length; i++) {
+    const t1 = /^\{\w+\}$/.test(s1[i])
+    const t2 = /^\{\w+\}$/.test(s2[i])
+    if (t1 !== t2) return false
+    if (!t1 && s1[i] !== s2[i]) return false
+  }
+  return true
 }
 
 /* ---------- API 定义服务端 Schema 校验 ---------- */
@@ -305,19 +352,23 @@ function validateCallParams(api, url) {
 }
 
 function matchApi(apis, method, reqPath) {
+  // 收集全部命中项后按特异性取最优：静态段优先于 {param} 段，
+  // 避免参数化路由遮蔽静态路由（匹配结果与注册顺序无关）
+  let best = null
+  let methodMismatch = false
   for (const api of apis) {
-    const { re, names } = compilePath(api.path)
+    const { re, names, segs } = compilePath(api.path)
     const m = re.exec(reqPath)
-    if (m && api.method === method) {
+    if (!m) continue
+    if (api.method !== method) { methodMismatch = true; continue }
+    if (!best || moreSpecific(segs, best.segs)) {
       const params = {}
       names.forEach((n, i) => (params[n] = decodeURIComponent(m[i + 1])))
-      return { api, params }
+      best = { api, params, segs }
     }
   }
-  // 路径命中但方法不符 → 405
-  for (const api of apis) {
-    if (compilePath(api.path).re.test(reqPath)) return { api: null, methodMismatch: true }
-  }
+  if (best) return { api: best.api, params: best.params }
+  if (methodMismatch) return { api: null, methodMismatch: true } // 路径命中但方法不符 → 405
   return null
 }
 
@@ -376,9 +427,8 @@ function evaluateAlerts(apiId) {
         detail = `平均延迟 ${m.avgLatency}ms，阈值 ${rule.threshold}ms`
       }
     } else if (rule.metric === 'qps') {
-      // 真实 QPS：近 60 秒滑动窗口调用数 / 60（此前误用当日累计总量，语义不符）
-      const window60 = (recentCalls.get(apiId) ?? []).filter((r) => r.ts > Date.now() - 60_000)
-      const qps = window60.length / 60
+      // 真实 QPS：近 60 秒滑动窗口（独立的按秒桶统计，不受健康度 50 条截断影响）
+      const qps = currentQps(apiId)
       if (qps > rule.threshold) {
         hit = true
         detail = `当前 QPS ${qps.toFixed(1)}（近 60 秒均值），阈值 ${rule.threshold}`
@@ -911,9 +961,10 @@ async function handleAdmin(req, res, url) {
       if (kind === 'apis') {
         const invalid = validateApiDef(obj)
         if (invalid) return j( 400, { message: `API 定义校验失败：${invalid}` })
-        // 路由唯一约束：method + path 服务端全局唯一，避免相同路由互相遮蔽
-        const clash = store.list('apis').find((a) => a.id !== obj.id && a.method === obj.method && a.path === obj.path)
-        if (clash) return j( 409, { message: `路由冲突：${obj.method} ${obj.path} 已被 API「${clash.name}」占用` })
+        // 路由冲突检测：相同 method 下形态完全相同的参数化路由（如 /users/{id} 与 /users/{name}）会互相遮蔽，拒绝注册；
+        // 交叉形态（如 /goods/search 与 /goods/{id}）允许共存，网关匹配时静态段优先，结果与注册顺序无关
+        const clash = store.list('apis').find((a) => a.id !== obj.id && a.method === obj.method && routeAmbiguous(a.path, obj.path))
+        if (clash) return j( 409, { message: `路由冲突：${obj.method} ${obj.path} 与已注册路由 ${clash.path}（API「${clash.name}」）形态相同，会互相遮蔽` })
         // backendUrl SSRF 注册时校验（网关转发时另有带缓存的兜底校验，双层防护）
         let backend
         try {

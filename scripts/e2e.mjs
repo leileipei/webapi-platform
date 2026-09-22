@@ -73,7 +73,7 @@ try {
     await fetch(`${BASE}/admin/apps/${appId}`, { method: 'DELETE', headers: H }).catch(() => {})
   }
   await fetch(`${BASE}/admin/groups/smoke-group-1`, { method: 'DELETE', headers: H }).catch(() => {})
-  for (const apiId of ['smoke-api-1', 'smoke-param']) {
+  for (const apiId of ['smoke-api-1', 'smoke-param', 'smoke-static', 'smoke-api-shadow']) {
     await fetch(`${BASE}/admin/apis/${apiId}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'offline' }) }).catch(() => {})
     await fetch(`${BASE}/admin/apis/${apiId}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }).catch(() => {})
     await fetch(`${BASE}/admin/apis/${apiId}`, { method: 'DELETE', headers: H }).catch(() => {})
@@ -92,6 +92,10 @@ try {
   // 3b. 路由唯一约束：相同 method+path 注册应 409
   r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-dup' }) }))
   ok('重复路由注册被拒(409)', r.status === 409)
+
+  // 3b2. 参数化路由冲突：同形占位符路由（/smoke/{name} 与 /smoke/{id}）应 409，与参数名无关
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-shadow', path: '/api/v1/smoke/{name}' }) }))
+  ok('同形参数路由冲突被拒(409)', r.status === 409, `status=${r.status} ${r.body?.message ?? ''}`)
 
   // 3c. 分组引用保护：分组下有 API 时删除应 409
   await j(await fetch(`${BASE}/admin/groups`, { method: 'POST', headers: H, body: JSON.stringify({ id: 'smoke-group-1', name: '冒烟分组', createdAt: '2026-09-07' }) }))
@@ -142,6 +146,19 @@ try {
   ok('参数类型错误被拒(400)', r.status === 400 && r.body?.code === 40001)
   r = await j(await fetch(`${BASE}/gw/api/v1/param-check?n=42`))
   ok('合法参数调用成功(200)', r.status === 200)
+
+  // 6d. 静态路由优先于参数路由（与注册顺序无关）：/smoke/ping 应命中静态 API 而非 /smoke/{id}
+  //     参数路由 smoke-api-1 是 apikey 鉴权，静态路由 smoke-static 是免鉴权；
+  //     若无密钥调用返回 401 说明被参数路由遮蔽，返回 200 且转发到 static-hit 说明静态优先生效
+  const staticApi = { id: 'smoke-static', name: '静态路由优先测试', method: 'GET', path: '/api/v1/smoke/ping', backendUrl: `${BASE}/upstream/echo/static-hit`, groupId: null, status: 'draft', auth: 'none', qps: 100, timeout: 3000, retry: 0, circuitBreaker: { enabled: false }, createdAt: '2026-09-07', updatedAt: '2026-09-07' }
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify(staticApi) }))
+  ok('静态路由允许与参数路由共存', r.status === 200, `status=${r.status} ${r.body?.message ?? ''}`)
+  await j(await fetch(`${BASE}/admin/apis/smoke-static/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'published' }) }))
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/ping`))
+  ok('静态路由优先命中（不被 {id} 遮蔽）', r.status === 200 && r.body?.data?.echo?.path?.includes('static-hit'), `status=${r.status} path=${r.body?.data?.echo?.path ?? ''}`)
+  r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42?foo=bar`))
+  // 无密钥调用参数路由：返回 401 说明仍正常命中路由（鉴权拒绝），而非 404 路由丢失
+  ok('参数路由仍可正常匹配(401 鉴权而非 404)', r.status === 401)
 
   // 7. 创建应用并授权（密钥由服务端生成，不信任客户端提交值）
   const app = { id: 'smoke-app-1', name: '冒烟测试应用', owner: 'QA', accessKey: 'ak_client_supplied_bad', secretKey: 'sk_client_supplied_bad', status: 'active', apiIds: [api.id], createdAt: '2026-09-07' }
@@ -197,6 +214,19 @@ try {
   await fetch(`${BASE}/admin/apps`, { method: 'POST', headers: H, body: JSON.stringify({ ...app, accessKey: ak, secretKey: newSk, status: 'active' }) })
   r = await j(await fetch(`${BASE}/gw/api/v1/smoke/42`, { headers: { 'X-Access-Key': ak, 'X-Secret-Key': newSk } }))
   ok('新 SecretKey 调用成功(200)', r.status === 200)
+
+  // 12c. QPS 告警：70 次突发调用（近 60 秒均值 ≈1.17/s），验证滑窗统计不被健康度 50 条截断压缩到 0.83 以下
+  const qpsTag = Date.now().toString(36)
+  const qpsRuleId = `smoke-rule-qps-${qpsTag}`
+  await j(await fetch(`${BASE}/admin/rules`, { method: 'POST', headers: H, body: JSON.stringify({ id: qpsRuleId, name: `冒烟QPS告警-${qpsTag}`, metric: 'qps', threshold: 1, level: 'info', enabled: true, createdAt: '2026-09-07' }) }))
+  for (let i = 0; i < 70; i += 10) {
+    await Promise.all(Array.from({ length: 10 }, () => fetch(`${BASE}/gw/api/v1/param-check?n=42`)))
+  }
+  r = await j(await fetch(`${BASE}/admin/state`, { headers: H }))
+  const qpsAlert = r.body?.alertRecords?.find((a) => a.ruleId === qpsRuleId)
+  const qpsVal = Number(qpsAlert?.message?.match(/QPS ([\d.]+)/)?.[1] ?? 0)
+  ok('QPS 告警触发且数值突破旧上限 0.83', !!qpsAlert && qpsVal > 0.83, qpsAlert?.message ?? '未产生告警')
+  await fetch(`${BASE}/admin/rules/${qpsRuleId}`, { method: 'DELETE', headers: H }).catch(() => {})
 
   // 13. 调用日志已落库
   r = await j(await fetch(`${BASE}/admin/logs?apiId=${api.id}`, { headers: H }))
