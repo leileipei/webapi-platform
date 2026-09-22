@@ -257,6 +257,53 @@ function compilePath(path) {
   return compiled
 }
 
+/* ---------- API 定义服务端 Schema 校验 ---------- */
+const API_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
+const PARAM_TYPES = ['string', 'number', 'boolean', 'object', 'array']
+/** 注册/编辑 API 时的服务端校验（前端校验仅改善体验，不可信任）。返回错误文案或 null */
+function validateApiDef(obj) {
+  if (!/^[a-zA-Z0-9_\-]{2,64}$/.test(String(obj.id ?? ''))) return 'id 需为 2~64 位字母/数字/下划线/中划线'
+  if (!obj.name || String(obj.name).trim().length === 0 || String(obj.name).length > 64) return '名称必填且不超过 64 字'
+  if (!API_METHODS.includes(obj.method)) return `非法请求方法：${obj.method}（支持 ${API_METHODS.join('/')}）`
+  const p = String(obj.path ?? '')
+  if (!p.startsWith('/') || p.length > 128) return '请求路径需以 / 开头且不超过 128 字符'
+  if (!/^\/[\w\-/{}]*$/.test(p)) return '请求路径含非法字符（支持字母、数字、-、_、/ 与 {param} 占位符）'
+  if ((p.match(/\{/g) ?? []).length !== (p.match(/\}/g) ?? []).length) return '路径占位符 {param} 大括号不配对'
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(String(obj.version ?? 'v1'))) return '版本号格式不合法'
+  // oauth2/jwt 网关在数据面尚未实现拦截逻辑，允许注册会造成"看似有鉴权实则裸奔"，直接拒绝
+  if (!['none', 'apikey'].includes(obj.auth)) return '认证方式仅支持 none / apikey（oauth2、jwt 暂未实现，注册后网关将无法正确拦截）'
+  if (!Number.isInteger(obj.timeout) || obj.timeout < 100 || obj.timeout > 60000) return '超时需为 100~60000 毫秒的整数'
+  if (!Number.isInteger(obj.retry) || obj.retry < 0 || obj.retry > 3) return '失败重试次数需为 0~3 的整数'
+  if (!Number.isInteger(obj.qps) || obj.qps < 1 || obj.qps > 1_000_000) return 'QPS 限流需为 1~1000000 的整数'
+  for (const [label, list] of [['Query 参数', obj.queryParams], ['请求头', obj.headers], ['Body 参数', obj.bodyParams]]) {
+    if (list === undefined || list === null) continue
+    if (!Array.isArray(list)) return `${label}定义必须是数组`
+    for (const prm of list) {
+      if (!prm?.name || String(prm.name).length > 64) return `${label}中存在未命名或名称超长的参数`
+      if (!PARAM_TYPES.includes(prm.type)) return `参数「${prm.name}」类型非法（支持 ${PARAM_TYPES.join('/')}）`
+    }
+  }
+  if (obj.circuitBreaker) {
+    const cb = obj.circuitBreaker
+    if (cb.errorRateThreshold !== undefined && (typeof cb.errorRateThreshold !== 'number' || cb.errorRateThreshold < 1 || cb.errorRateThreshold > 100)) return '熔断错误率阈值需为 1~100'
+    if (cb.windowSec !== undefined && (typeof cb.windowSec !== 'number' || cb.windowSec < 5 || cb.windowSec > 300)) return '熔断统计窗口需为 5~300 秒'
+  }
+  // 分组引用完整性：groupId 必须指向已存在的分组
+  if (obj.groupId && !store.get('groups', obj.groupId)) return '所属分组不存在'
+  return null
+}
+
+/** 网关入参校验：必填 Query 参数缺失 / number、boolean 类型不符时拒绝调用（在鉴权之后执行，防止未授权方探测参数结构） */
+function validateCallParams(api, url) {
+  for (const qp of api.queryParams ?? []) {
+    const v = url.searchParams.get(qp.name)
+    if (qp.required && (v === null || v === '')) return `缺少必填 Query 参数「${qp.name}」`
+    if (v !== null && qp.type === 'number' && !/^-?\d+(\.\d+)?$/.test(v)) return `Query 参数「${qp.name}」需为数字`
+    if (v !== null && qp.type === 'boolean' && !['true', 'false'].includes(v)) return `Query 参数「${qp.name}」需为布尔值（true/false）`
+  }
+  return null
+}
+
 function matchApi(apis, method, reqPath) {
   for (const api of apis) {
     const { re, names } = compilePath(api.path)
@@ -459,6 +506,13 @@ async function handleGateway(req, res, url) {
       writeLog(403, { message: `应用「${app.name}」未授权` })
       return json(res, 403, { code: 40302, message: `应用「${app.name}」未被授权调用该 API` }, '*')
     }
+  }
+
+  // 入参 Schema 校验（必填/类型），在鉴权之后执行
+  const paramErr = validateCallParams(api, url)
+  if (paramErr) {
+    writeLog(400, { appName: log.appName, message: paramErr })
+    return json(res, 400, { code: 40001, message: paramErr }, '*')
   }
 
   // 限流
@@ -853,8 +907,11 @@ async function handleAdmin(req, res, url) {
         return j( 409, { message: `API「${existing.name}」当前为已发布状态，不允许编辑，请先下线` })
       }
       const isNew = !existing
-      // 路由唯一约束：method + path 服务端全局唯一，避免相同路由互相遮蔽
+      // 服务端 Schema 校验：字段类型/取值范围/枚举/引用完整性（前端校验不可信任）
       if (kind === 'apis') {
+        const invalid = validateApiDef(obj)
+        if (invalid) return j( 400, { message: `API 定义校验失败：${invalid}` })
+        // 路由唯一约束：method + path 服务端全局唯一，避免相同路由互相遮蔽
         const clash = store.list('apis').find((a) => a.id !== obj.id && a.method === obj.method && a.path === obj.path)
         if (clash) return j( 409, { message: `路由冲突：${obj.method} ${obj.path} 已被 API「${clash.name}」占用` })
         // backendUrl SSRF 注册时校验（网关转发时另有带缓存的兜底校验，双层防护）

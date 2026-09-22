@@ -72,10 +72,12 @@ try {
   for (const appId of ['smoke-app-1', 'smoke-app-2']) {
     await fetch(`${BASE}/admin/apps/${appId}`, { method: 'DELETE', headers: H }).catch(() => {})
   }
-  await fetch(`${BASE}/admin/apis/smoke-group-1`, { method: 'DELETE', headers: H }).catch(() => {})
-  await fetch(`${BASE}/admin/apis/smoke-api-1/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'offline' }) }).catch(() => {})
-  await fetch(`${BASE}/admin/apis/smoke-api-1/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }).catch(() => {})
-  await fetch(`${BASE}/admin/apis/smoke-api-1`, { method: 'DELETE', headers: H }).catch(() => {})
+  await fetch(`${BASE}/admin/groups/smoke-group-1`, { method: 'DELETE', headers: H }).catch(() => {})
+  for (const apiId of ['smoke-api-1', 'smoke-param']) {
+    await fetch(`${BASE}/admin/apis/${apiId}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'offline' }) }).catch(() => {})
+    await fetch(`${BASE}/admin/apis/${apiId}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }).catch(() => {})
+    await fetch(`${BASE}/admin/apis/${apiId}`, { method: 'DELETE', headers: H }).catch(() => {})
+  }
 
   // 3. 注册新 API（草稿）
   const api = {
@@ -104,6 +106,14 @@ try {
   r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-ssrf', path: '/api/v1/smoke-ssrf', backendUrl: 'http://169.254.169.254/latest/meta-data' }) }))
   ok('注册时 SSRF 拦截(403)', r.status === 403, `status=${r.status} ${r.body?.message ?? ''}`)
 
+  // 3e. 服务端 Schema 校验：非法方法 / 未实现认证方式 / 悬空分组引用 均拒绝
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-x1', path: '/api/v1/smoke-x1', method: 'BREW' }) }))
+  ok('非法请求方法被拒(400)', r.status === 400)
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-x2', path: '/api/v1/smoke-x2', auth: 'oauth2' }) }))
+  ok('未实现认证方式被拒(400)', r.status === 400)
+  r = await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify({ ...api, id: 'smoke-api-x3', path: '/api/v1/smoke-x3', groupId: 'no-such-group' }) }))
+  ok('悬空分组引用被拒(400)', r.status === 400)
+
   // 4. 后端地址连通性测试
   r = await j(await fetch(`${BASE}/admin/test`, { method: 'POST', headers: H, body: JSON.stringify({ url: `${BASE}/upstream/echo/ping` }) }))
   ok('连通性测试（可达）', r.status === 200 && r.body.reachable === true, `status=${r.body.status} ${r.body.latency}ms`)
@@ -121,6 +131,17 @@ try {
   // 6b. 状态机：已发布不允许直接废弃（须先下线）
   r = await j(await fetch(`${BASE}/admin/apis/${api.id}/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'deprecated' }) }))
   ok('非法状态流转被拒(409)', r.status === 409)
+
+  // 6c. 网关入参 Schema 校验：必填缺失/类型错误拒绝，合法放行（auth=none 免密钥）
+  const paramApi = { id: 'smoke-param', name: '入参校验测试', method: 'GET', path: '/api/v1/param-check', backendUrl: `${BASE}/upstream/echo`, groupId: null, status: 'draft', auth: 'none', qps: 100, timeout: 3000, retry: 0, circuitBreaker: { enabled: false }, queryParams: [{ name: 'n', type: 'number', required: true, description: '数字参数' }], createdAt: '2026-09-07', updatedAt: '2026-09-07' }
+  await j(await fetch(`${BASE}/admin/apis`, { method: 'POST', headers: H, body: JSON.stringify(paramApi) }))
+  await j(await fetch(`${BASE}/admin/apis/smoke-param/status`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'published' }) }))
+  r = await j(await fetch(`${BASE}/gw/api/v1/param-check`))
+  ok('缺少必填参数被拒(400)', r.status === 400 && r.body?.code === 40001)
+  r = await j(await fetch(`${BASE}/gw/api/v1/param-check?n=abc`))
+  ok('参数类型错误被拒(400)', r.status === 400 && r.body?.code === 40001)
+  r = await j(await fetch(`${BASE}/gw/api/v1/param-check?n=42`))
+  ok('合法参数调用成功(200)', r.status === 200)
 
   // 7. 创建应用并授权（密钥由服务端生成，不信任客户端提交值）
   const app = { id: 'smoke-app-1', name: '冒烟测试应用', owner: 'QA', accessKey: 'ak_client_supplied_bad', secretKey: 'sk_client_supplied_bad', status: 'active', apiIds: [api.id], createdAt: '2026-09-07' }

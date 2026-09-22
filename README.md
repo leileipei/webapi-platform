@@ -27,7 +27,7 @@
 
 - 管理 API（`/admin/*`）：API / 分组 / 应用 / 告警规则的增删改查、状态流转、指标聚合查询
 - **控制台登录认证**：账号密码登录（**scrypt 加盐哈希**存储，旧 SHA-256 数据登录后自动升级）、**HMAC-SHA256 签名令牌**（12 小时过期，**重启服务不失效**；改密/角色变更/恢复备份后旧令牌立即失效，令牌篡改即拒）、连续 5 次失败锁定 5 分钟、**初始密码首次登录强制修改（服务端硬阻断，错误码 40310）**；`/admin/*` 除登录外均需鉴权，数据面 `/gw/*` 不受影响仍用应用密钥
-- **安全加固**：全站安全响应头（CSP / X-Frame-Options / nosniff / Referrer-Policy）；管理接口 CORS 默认不下发（跨域需配置 `CORS_ORIGIN` 白名单）；请求体大小上限（网关默认 10MB，`GATEWAY_MAX_BODY` 可调）；**SSRF 双层防护**（注册 API 时校验 backendUrl + 网关转发时带缓存兜底，云元数据 / 回环 / 链路本地地址拦截，`ALLOW_LOCAL_TEST=1` 可放行本机联调）；**路由 method+path 服务端唯一约束**；**严格生命周期状态机**（草稿→发布→下线→废弃，废弃为终态）；分组引用保护（分组下有 API 禁止删除）
+- **安全加固**：全站安全响应头（CSP / X-Frame-Options / nosniff / Referrer-Policy）；管理接口 CORS 默认不下发（跨域需配置 `CORS_ORIGIN` 白名单）；请求体大小上限（网关默认 10MB，`GATEWAY_MAX_BODY` 可调）；**SSRF 双层防护**（注册 API 时校验 backendUrl + 网关转发时带缓存兜底，云元数据 / 回环 / 链路本地地址拦截，`ALLOW_LOCAL_TEST=1` 可放行本机联调）；**路由 method+path 服务端唯一约束**；**严格生命周期状态机**（草稿→发布→下线→废弃，废弃为终态）；分组引用保护（分组下有 API 禁止删除）；**服务端 Schema 双层校验**（注册时校验 API 定义合法性——方法/路径/认证方式/限流熔断参数范围/分组引用，网关调用时校验必填 Query 参数与 number/boolean 类型，非法入参返回 40001）
 - **用户与角色（`/admin/users`）**：多用户 CRUD（仅管理员），viewer / operator / admin 三级接口级权限控制，角色或密码变更后该用户会话立即失效，禁止删除自己或唯一管理员
 - **应用密钥**：AccessKey + SecretKey 由服务端加密安全随机数生成；**SecretKey 仅存储 SHA-256 哈希、永不下发，明文只在创建/重置成功时一次性展示**（启用中的应用须先停用才能重置）
 - **日志归档（`/admin/archives`）**：`LOG_RETENTION_DAYS`（默认 30）天前的调用日志与操作审计日志分别自动导出为 `logs-archive-*.ndjson.gz` / `audit-archive-*.ndjson.gz` 并从库中删除；仅管理员可手动触发 / 列表 / 下载
